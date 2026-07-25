@@ -1,0 +1,2992 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>Haki Fit</title>
+
+<!-- Meta pour un rendu "app" quand ajouté à l'écran d'accueil iOS -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Haki Fit" />
+<meta name="theme-color" content="#121212" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Crect width='180' height='180' fill='%23121212'/%3E%3Ctext x='50%25' y='58%25' font-size='90' text-anchor='middle' fill='%23FFC233' font-family='Arial, sans-serif' font-weight='bold'%3E%E2%9A%94%3C/text%3E%3C/svg%3E" />
+
+<style>
+  html, body { margin: 0; padding: 0; background: #121212; height: 100%; overscroll-behavior-y: contain; }
+  #root { min-height: 100vh; }
+</style>
+
+<!-- Filet de sécurité : si une erreur survient, on l'affiche à l'écran au lieu de rester bloqué sur "Chargement..." -->
+<script>
+  window.addEventListener("error", function (e) {
+    var root = document.getElementById("root");
+    if (root) {
+      root.innerHTML =
+        '<pre style="color:#ff8080;background:#1B1A18;padding:16px;white-space:pre-wrap;font-size:13px;font-family:monospace;">' +
+        "Erreur de chargement :\n" + (e.message || e) + "\n(ligne " + e.lineno + ")" +
+        "</pre>";
+    }
+  });
+  // Mode hors-ligne : le service worker met en cache l'app après la 1ère ouverture connectée.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    });
+  }
+</script>
+
+<!-- React (nécessaire pour faire tourner l'app) — CDN jsDelivr, version fixe pour plus de fiabilité -->
+<script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+<!-- Babel (transforme le JSX directement dans le navigateur, pas besoin d'installation) -->
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+</head>
+<body>
+<div id="root">
+  <div style="color:#FFFFFF;font-family:sans-serif;text-align:center;padding-top:40vh;">Chargement de Haki Fit...</div>
+</div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+// --- Icônes (remplacent lucide-react) : simples composants emoji, sans dépendance ---
+function makeIcon(emoji) {
+  return function Icon({ size = 18, color, strokeWidth, style = {} }) {
+    return <span style={{ fontSize: size, lineHeight: 1, color, display: "inline-block", ...style }}>{emoji}</span>;
+  };
+}
+const Home = makeIcon("🏠");
+const Dumbbell = makeIcon("🏋️");
+const TrendingUp = makeIcon("📈");
+const ListChecks = makeIcon("📋");
+const Plus = makeIcon("➕");
+const Minus = makeIcon("➖");
+const ChevronLeft = makeIcon("‹");
+const Check = makeIcon("✓");
+const X = makeIcon("✕");
+const Trash2 = makeIcon("🗑");
+const Users = makeIcon("🧑‍🏫");
+
+// --- Stockage (remplace window.storage de Claude) : localStorage du navigateur, 100% local et gratuit ---
+window.storage = {
+  async get(key) {
+    const v = localStorage.getItem("charge:" + key);
+    return v !== null ? { key, value: v, shared: false } : null;
+  },
+  async set(key, value) {
+    localStorage.setItem("charge:" + key, value);
+    return { key, value, shared: false };
+  },
+  async delete(key) {
+    localStorage.removeItem("charge:" + key);
+    return { key, deleted: true, shared: false };
+  },
+  async list(prefix) {
+    const keys = Object.keys(localStorage)
+      .filter((k) => k.startsWith("charge:") && (!prefix || k.slice(7).startsWith(prefix)))
+      .map((k) => k.slice(7));
+    return { keys, prefix, shared: false };
+  },
+};
+
+// --- Petit graphique en ligne (remplace recharts, pas de dépendance) ---
+function MiniLineChart({ data, dataKey, height = 180 }) {
+  if (!data || data.length === 0) return null;
+  const values = data.map((d) => Number(d[dataKey]) || 0);
+  const max = Math.max(...values);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const w = 320;
+  const pad = 14;
+  const stepX = data.length > 1 ? (w - pad * 2) / (data.length - 1) : 0;
+  const points = values.map((v, i) => {
+    const x = pad + i * stepX;
+    const y = height - pad - ((v - min) / range) * (height - pad * 2);
+    return [x, y];
+  });
+  const polyline = points.map((p) => p.join(",")).join(" ");
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${height}`} width="100%" height={height} preserveAspectRatio="none">
+        {[0.25, 0.5, 0.75].map((f, i) => (
+          <line key={i} x1={pad} x2={w - pad} y1={pad + f * (height - pad * 2)} y2={pad + f * (height - pad * 2)} stroke="#332E28" strokeDasharray="3 3" />
+        ))}
+        <polyline points={polyline} fill="none" stroke="#FFC233" strokeWidth="2.5" />
+        {points.map(([x, y], i) => (
+          <circle key={i} cx={x} cy={y} r="3.5" fill="#FFC233" />
+        ))}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#FFFFFF", marginTop: 4 }}>
+        <span>{data[0]?.date}</span>
+        {data.length > 1 && <span>{data[data.length - 1]?.date}</span>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Seed data (reconstructed from the user's PDF program) ---------- */
+
+const BLOCKS_SEED = [{ id: "seed-block", name: "Programme initial", active: true }];
+
+const PROGRAMS_SEED = [
+  {
+    id: "A",
+    name: "Haut du corps 1",
+    blockId: "seed-block",
+    exercises: [
+      { id: "a1", name: "Développé couché haltère", muscle: "Pectoraux", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 120 },
+      { id: "a2", name: "Incliné guidé", muscle: "Pectoraux", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 90 },
+      { id: "a3", name: "Rowing sur banc incliné", muscle: "Haut du dos", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 90 },
+      { id: "a4", name: "Tirage vertical uni neutre (diagonale)", muscle: "Grand dorsal", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 90 },
+      { id: "a5", name: "Curl supporté haltère", muscle: "Biceps", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 60 },
+      { id: "a6", name: "Élévation latérale supporté", muscle: "Deltoïde moyen", type: "muscu", repMin: 15, repMax: 20, sets: 1, restSeconds: 30, note: "Dropset mécanique : échec incliné → échec assis → échec debout" },
+    ],
+  },
+  {
+    id: "B",
+    name: "Jambes",
+    blockId: "seed-block",
+    exercises: [
+      { id: "b1", name: "Leg curl allongé", muscle: "Ischios", type: "muscu", repMin: 10, repMax: 15, sets: 3, restSeconds: 90 },
+      { id: "b2", name: "Presse à cuisse (focus quadriceps)", muscle: "Quadriceps", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 120 },
+      { id: "b3", name: "Leg extension", muscle: "Quadriceps", type: "muscu", repMin: 10, repMax: 15, sets: 3, restSeconds: 60 },
+      { id: "b4", name: "Hip extension 45° (focus ischios)", muscle: "Ischios", type: "muscu", repMin: 10, repMax: 15, sets: 3, restSeconds: 60 },
+    ],
+  },
+  {
+    id: "C",
+    name: "Haut du corps 2",
+    blockId: "seed-block",
+    exercises: [
+      { id: "c1", name: "Rowing sur banc incliné (bûcheron)", muscle: "Haut du dos", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 90 },
+      { id: "c2", name: "Tirage vertical neutre", muscle: "Grand dorsal", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 90 },
+      { id: "c3", name: "Écarté vis-à-vis machine (cornes)", muscle: "Pectoraux", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 60 },
+      { id: "c4", name: "Chest press horizontal", muscle: "Pectoraux", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 90 },
+      { id: "c5", name: "Curl supination à la poulie (barre courbée)", muscle: "Biceps", type: "muscu", repMin: 9, repMax: 12, sets: 3, restSeconds: 60 },
+    ],
+  },
+];
+
+function buildSeedSessions() {
+  // Plus d'historique de démonstration : l'app démarre avec un historique vide.
+  return [];
+}
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const fmtDate = (iso) => new Date(iso).toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+function fmtDuration(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+function fmtDurationLong(totalSeconds) {
+  if (!totalSeconds) return null;
+  const m = Math.round(totalSeconds / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `${h} h ${rest} min` : `${h} h`;
+}
+function fmtRestTime(seconds) {
+  if (!seconds) return null;
+  if (seconds < 60) return `${seconds} sec`;
+  const m = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${m} min ${rest} sec` : `${m} min`;
+}
+
+// Normalise une entrée cardio en liste de segments, pour compatibilité avec
+// l'ancien format (durationSeconds/speed/incline à plat, un seul segment).
+function cardioSegments(entry) {
+  if (!entry) return [];
+  if (entry.segments) return entry.segments;
+  if (entry.durationSeconds !== undefined) {
+    return [{ durationSeconds: entry.durationSeconds, speed: entry.speed, incline: entry.incline }];
+  }
+  return [];
+}
+
+/* ---------- Export (CSV download / TSV copy for Google Sheets) ---------- */
+
+const EXPORT_HEADERS = ["Date", "Heure", "Programme", "Séance", "Durée séance (min)", "Ressenti", "Exercice", "Type", "Série / Segment", "Reps", "Poids (kg)", "Durée exercice (min)", "Vitesse (km/h)", "Pente (%)"];
+
+function buildExportRows(sessionsToExport, exerciseIndex) {
+  const rows = [EXPORT_HEADERS];
+  [...sessionsToExport]
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+    .forEach((s) => {
+      const d = new Date(s.date);
+      const dateStr = d.toLocaleDateString("fr-FR");
+      const timeStr = fmtTime(s.date);
+      const durMin = s.durationSeconds ? Math.round(s.durationSeconds / 60) : "";
+      const exIds = Object.keys(s.entries);
+      if (exIds.length === 0) {
+        rows.push([dateStr, timeStr, s.blockName || "", s.programName || "", durMin, s.comment || "", "", "", "", "", "", "", "", ""]);
+      }
+      exIds.forEach((exId) => {
+        const name = exerciseIndex[exId]?.name || exId;
+        const entry = s.entries[exId];
+        if (!Array.isArray(entry)) {
+          // Entrée cardio : un ou plusieurs segments (durée / vitesse / pente)
+          cardioSegments(entry).forEach((seg, i) => {
+            rows.push([
+              dateStr, timeStr, s.blockName || "", s.programName || "", durMin, s.comment || "",
+              name, "Cardio", i + 1, "", "",
+              seg.durationSeconds ? Math.round(seg.durationSeconds / 60) : "",
+              seg.speed ?? "", seg.incline ?? "",
+            ]);
+          });
+        } else {
+          entry.forEach((set, i) => {
+            rows.push([dateStr, timeStr, s.blockName || "", s.programName || "", durMin, s.comment || "", name, "Muscu", i + 1, set.reps, set.poids, "", "", ""]);
+          });
+        }
+      });
+    });
+  return rows;
+}
+
+function toCSV(rows) {
+  return rows
+    .map((r) =>
+      r
+        .map((cell) => {
+          const str = String(cell ?? "");
+          return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+        })
+        .join(",")
+    )
+    .join("\n");
+}
+
+function toTSV(rows) {
+  return rows.map((r) => r.map((cell) => String(cell ?? "").replace(/\t/g, " ")).join("\t")).join("\n");
+}
+
+function downloadCSV(filename, csvContent) {
+  try {
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+async function copyTSV(tsvContent) {
+  try {
+    await navigator.clipboard.writeText(tsvContent);
+    return true;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+function ExportButtons({ sessions, exerciseIndex, label }) {
+  const [status, setStatus] = useState(null); // 'downloaded' | 'copied' | 'error'
+
+  function handleDownload() {
+    const rows = buildExportRows(sessions, exerciseIndex);
+    const ok = downloadCSV(`charge-export-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(rows));
+    setStatus(ok ? "downloaded" : "error");
+    setTimeout(() => setStatus(null), 2500);
+  }
+
+  async function handleCopy() {
+    const rows = buildExportRows(sessions, exerciseIndex);
+    const ok = await copyTSV(toTSV(rows));
+    setStatus(ok ? "copied" : "error");
+    setTimeout(() => setStatus(null), 2500);
+  }
+
+  if (sessions.length === 0) return null;
+
+  return (
+    <div style={S.exportBox}>
+      <div style={S.exportLabel}>{label}</div>
+      <div style={S.exportRow}>
+        <button style={S.exportBtn} onClick={handleDownload}>
+          Télécharger (CSV)
+        </button>
+        <button style={S.exportBtnGhost} onClick={handleCopy}>
+          Copier (coller dans Sheets)
+        </button>
+      </div>
+      {status === "downloaded" && <div style={S.exportStatus}>Fichier téléchargé — importe-le dans Google Sheets via Fichier → Importer.</div>}
+      {status === "copied" && <div style={S.exportStatus}>Copié ! Colle directement dans une cellule Google Sheets.</div>}
+      {status === "error" && <div style={S.exportStatusError}>Échec — réessaie, ou vérifie les autorisations du navigateur.</div>}
+    </div>
+  );
+}
+
+async function loadState() {
+  let programs, sessions, goals, blocks, bodyweight, coachAthletes;
+  try {
+    const p = await window.storage.get("programs");
+    programs = p ? JSON.parse(p.value) : null;
+  } catch { programs = null; }
+  try {
+    const s = await window.storage.get("sessions");
+    sessions = s ? JSON.parse(s.value) : null;
+  } catch { sessions = null; }
+  try {
+    const g = await window.storage.get("goals");
+    goals = g ? JSON.parse(g.value) : null;
+  } catch { goals = null; }
+  try {
+    const b = await window.storage.get("blocks");
+    blocks = b ? JSON.parse(b.value) : null;
+  } catch { blocks = null; }
+  try {
+    const bw = await window.storage.get("bodyweight");
+    bodyweight = bw ? JSON.parse(bw.value) : null;
+  } catch { bodyweight = null; }
+  try {
+    const ca = await window.storage.get("coachAthletes");
+    coachAthletes = ca ? JSON.parse(ca.value) : null;
+  } catch { coachAthletes = null; }
+  let coachPhone = "";
+  try {
+    const cp = await window.storage.get("coachPhone");
+    coachPhone = cp ? cp.value : "";
+  } catch { coachPhone = ""; }
+  if (!blocks) blocks = BLOCKS_SEED;
+  if (!programs) programs = PROGRAMS_SEED;
+  if (!sessions) sessions = buildSeedSessions();
+  if (!goals) goals = {};
+  if (!bodyweight) bodyweight = [];
+  if (!coachAthletes) coachAthletes = [];
+
+  // Migration: make sure every program points to a valid block
+  const validBlockIds = new Set(blocks.map((b) => b.id));
+  const fallbackBlockId = blocks.find((b) => b.active)?.id || blocks[0]?.id;
+  programs = programs.map((p) =>
+    p.blockId && validBlockIds.has(p.blockId) ? p : { ...p, blockId: fallbackBlockId }
+  );
+
+  return { programs, sessions, goals, blocks, bodyweight, coachAthletes, coachPhone };
+}
+
+async function saveSessions(sessions) {
+  try { await window.storage.set("sessions", JSON.stringify(sessions)); } catch (e) { console.error(e); }
+}
+async function savePrograms(programs) {
+  try { await window.storage.set("programs", JSON.stringify(programs)); } catch (e) { console.error(e); }
+}
+async function saveGoals(goals) {
+  try { await window.storage.set("goals", JSON.stringify(goals)); } catch (e) { console.error(e); }
+}
+async function saveBlocks(blocks) {
+  try { await window.storage.set("blocks", JSON.stringify(blocks)); } catch (e) { console.error(e); }
+}
+async function saveBodyweight(bodyweight) {
+  try { await window.storage.set("bodyweight", JSON.stringify(bodyweight)); } catch (e) { console.error(e); }
+}
+async function saveCoachAthletes(athletes) {
+  try { await window.storage.set("coachAthletes", JSON.stringify(athletes)); } catch (e) { console.error(e); }
+}
+async function saveCoachPhone(phone) {
+  try { await window.storage.set("coachPhone", phone); } catch (e) { console.error(e); }
+}
+
+/* ---------- Sauvegarde / restauration complète ---------- */
+
+function buildFullBackup({ programs, sessions, goals, blocks, bodyweight }) {
+  return JSON.stringify(
+    { app: "charge", version: 1, exportedAt: new Date().toISOString(), programs, sessions, goals, blocks, bodyweight },
+    null,
+    2
+  );
+}
+
+function downloadJSON(filename, jsonContent) {
+  try {
+    const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+/* ---------- Échanges coach ↔ suivi (via texte WhatsApp, sans serveur) ---------- */
+
+function packPayload(type, data) {
+  return `##HAKIFIT-${type}##\n${JSON.stringify(data)}\n##END##`;
+}
+
+function unpackPayload(text) {
+  const match = text.match(/##HAKIFIT-(\w+)##\s*([\s\S]*?)\s*##END##/);
+  if (match) {
+    try { return { type: match[1], data: JSON.parse(match[2]) }; } catch { return null; }
+  }
+  return null;
+}
+
+function buildWhatsAppLink(phone, text) {
+  const encoded = encodeURIComponent(text);
+  const digits = (phone || "").replace(/[^0-9]/g, "");
+  return digits ? `https://wa.me/${digits}?text=${encoded}` : `https://api.whatsapp.com/send?text=${encoded}`;
+}
+
+function programSummaryText(blockName, programs) {
+  let out = `📋 Programme : ${blockName}\n`;
+  programs.forEach((p, i) => {
+    out += `\n${i + 1}. ${p.name}\n`;
+    p.exercises.forEach((ex) => {
+      if (ex.type === "cardio") {
+        out += `   • ${ex.name} (cardio)\n`;
+      } else {
+        out += `   • ${ex.name} — ${ex.sets}×${ex.repMin}-${ex.repMax} reps${ex.restSeconds ? `, repos ${fmtRestTime(ex.restSeconds)}` : ""}\n`;
+      }
+    });
+  });
+  return out;
+}
+
+function sessionSummaryText(session, exerciseIndex) {
+  let out = `📊 Séance : ${session.programName || "Séance"}\n`;
+  out += `${new Date(session.date).toLocaleDateString("fr-FR")} à ${fmtTime(session.date)}`;
+  if (session.durationSeconds) out += ` · ${fmtDurationLong(session.durationSeconds)}`;
+  out += `\n`;
+  Object.entries(session.entries).forEach(([exId, entry]) => {
+    const name = exerciseIndex[exId]?.name || exId;
+    out += `\n${name} :\n`;
+    if (Array.isArray(entry)) {
+      entry.forEach((s, i) => (out += `  Série ${i + 1} : ${s.reps} reps × ${s.poids} kg\n`));
+    } else {
+      cardioSegments(entry).forEach((seg) => {
+        out += `  ${Math.round((seg.durationSeconds || 0) / 60)} min`;
+        out += seg.speed ? ` · ${seg.speed} km/h` : "";
+        out += seg.incline ? ` · pente ${seg.incline}%` : "";
+        out += `\n`;
+      });
+    }
+  });
+  if (session.comment) out += `\nRessenti : ${session.comment}\n`;
+  return out;
+}
+
+function goalsSummaryText(athleteName, goals, exerciseIndex) {
+  let out = `🎯 Objectifs pour ${athleteName}\n`;
+  Object.entries(goals).forEach(([exId, text]) => {
+    if (!text) return;
+    out += `\n${exerciseIndex[exId]?.name || exId} : ${text}`;
+  });
+  return out;
+}
+
+/* ---------- Root ---------- */
+
+function App() {
+  const [loading, setLoading] = useState(true);
+  const [programs, setPrograms] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [goals, setGoals] = useState({});
+  const [blocks, setBlocks] = useState([]);
+  const [bodyweight, setBodyweight] = useState([]);
+  const [coachAthletes, setCoachAthletes] = useState([]);
+  const [coachPhone, setCoachPhone] = useState("");
+  const [tab, setTab] = useState("home");
+  const [activeProgram, setActiveProgram] = useState(null); // program object during logging
+  const [historyExercise, setHistoryExercise] = useState(null);
+  const [historySession, setHistorySession] = useState(null); // session object being viewed in detail
+  const [programForm, setProgramForm] = useState(null); // { mode: 'create'|'edit', blockId, program }
+  const [showBodyweight, setShowBodyweight] = useState(false);
+  const [activeAthleteId, setActiveAthleteId] = useState(null);
+
+  useEffect(() => {
+    loadState().then(({ programs, sessions, goals, blocks, bodyweight, coachAthletes, coachPhone }) => {
+      setPrograms(programs);
+      setSessions(sessions);
+      setGoals(goals);
+      setBlocks(blocks);
+      setBodyweight(bodyweight);
+      setCoachAthletes(coachAthletes);
+      setCoachPhone(coachPhone);
+      setLoading(false);
+    });
+  }, []);
+
+  const exerciseIndex = useMemo(() => {
+    const idx = {};
+    programs.forEach((p) => p.exercises.forEach((e) => (idx[e.id] = { ...e, programName: p.name })));
+    return idx;
+  }, [programs]);
+
+  function finishSession(session) {
+    const next = [...sessions, session];
+    setSessions(next);
+    saveSessions(next);
+    setActiveProgram(null);
+    setTab("home");
+  }
+
+  function resetHistory() {
+    setSessions([]);
+    saveSessions([]);
+  }
+
+  function addBodyweight(entry) {
+    setBodyweight((bw) => {
+      const next = [...bw.filter((e) => e.date !== entry.date), entry].sort((a, b) => (a.date < b.date ? -1 : 1));
+      saveBodyweight(next);
+      return next;
+    });
+  }
+
+  function deleteBodyweight(date) {
+    setBodyweight((bw) => {
+      const next = bw.filter((e) => e.date !== date);
+      saveBodyweight(next);
+      return next;
+    });
+  }
+
+  function exportBackup() {
+    const json = buildFullBackup({ programs, sessions, goals, blocks, bodyweight });
+    return downloadJSON(`haki-fit-sauvegarde-${new Date().toISOString().slice(0, 10)}.json`, json);
+  }
+
+  function importBackup(data) {
+    if (data.programs) { setPrograms(data.programs); savePrograms(data.programs); }
+    if (data.sessions) { setSessions(data.sessions); saveSessions(data.sessions); }
+    if (data.goals) { setGoals(data.goals); saveGoals(data.goals); }
+    if (data.blocks) { setBlocks(data.blocks); saveBlocks(data.blocks); }
+    if (data.bodyweight) { setBodyweight(data.bodyweight); saveBodyweight(data.bodyweight); }
+  }
+
+  function saveGoal(exId, text) {
+    setGoals((g) => {
+      const next = { ...g, [exId]: text };
+      if (!text) delete next[exId];
+      saveGoals(next);
+      return next;
+    });
+  }
+
+  function addProgram(program) {
+    setPrograms((p) => {
+      const next = [...p, program];
+      savePrograms(next);
+      return next;
+    });
+    setProgramForm(null);
+  }
+
+  function updateProgram(updated) {
+    setPrograms((p) => {
+      const next = p.map((x) => (x.id === updated.id ? { ...x, ...updated } : x));
+      savePrograms(next);
+      return next;
+    });
+    setProgramForm(null);
+  }
+
+  // Suppression "douce" : la séance disparaît des listes actives mais reste
+  // consultable dans l'historique (les séances passées gardent leur sens).
+  function deleteProgram(id) {
+    setPrograms((p) => {
+      const next = p.map((x) => (x.id === id ? { ...x, deleted: true } : x));
+      savePrograms(next);
+      return next;
+    });
+  }
+
+  function duplicateProgram(id) {
+    setPrograms((p) => {
+      const original = p.find((x) => x.id === id);
+      if (!original) return p;
+      const copy = {
+        ...original,
+        id: uid(),
+        name: `${original.name} (copie)`,
+        exercises: original.exercises.map((ex) => ({ ...ex, id: uid() })),
+        deleted: false,
+      };
+      const next = [...p, copy];
+      savePrograms(next);
+      return next;
+    });
+  }
+
+  function addBlock(name) {
+    const block = { id: uid(), name: name.trim(), active: false };
+    setBlocks((bs) => {
+      const next = [...bs, block];
+      saveBlocks(next);
+      return next;
+    });
+    return block.id;
+  }
+
+  function setActiveBlock(id) {
+    setBlocks((bs) => {
+      const next = bs.map((b) => ({ ...b, active: b.id === id }));
+      saveBlocks(next);
+      return next;
+    });
+  }
+
+  // ---- Réception d'un envoi du coach (côté suivi) ----
+  function importCoachProgram(data, coachName) {
+    const block = { id: uid(), name: data.block?.name || "Programme du coach", active: false, coached: true, coachName: coachName || "" };
+    const importedPrograms = (data.programs || []).map((p) => ({ ...p, blockId: block.id, deleted: false }));
+    setBlocks((bs) => {
+      const next = [...bs, block];
+      saveBlocks(next);
+      return next;
+    });
+    setPrograms((p) => {
+      const next = [...p, ...importedPrograms];
+      savePrograms(next);
+      return next;
+    });
+    return block.id;
+  }
+
+  function importCoachGoals(data) {
+    setGoals((g) => {
+      const next = { ...g, ...(data.goals || {}) };
+      saveGoals(next);
+      return next;
+    });
+  }
+
+  // ---- Gestion des suivis (côté coach) ----
+  function updateCoachPhone(phone) {
+    setCoachPhone(phone);
+    saveCoachPhone(phone);
+  }
+
+  function addAthlete(name) {
+    const athlete = { id: uid(), name: name.trim(), programs: [], sessions: [], goals: {} };
+    setCoachAthletes((as) => {
+      const next = [...as, athlete];
+      saveCoachAthletes(next);
+      return next;
+    });
+    return athlete.id;
+  }
+
+  function deleteAthlete(id) {
+    setCoachAthletes((as) => {
+      const next = as.filter((a) => a.id !== id);
+      saveCoachAthletes(next);
+      return next;
+    });
+    if (activeAthleteId === id) setActiveAthleteId(null);
+  }
+
+  function updateAthlete(id, patch) {
+    setCoachAthletes((as) => {
+      const next = as.map((a) => (a.id === id ? { ...a, ...patch } : a));
+      saveCoachAthletes(next);
+      return next;
+    });
+  }
+
+  if (loading) {
+    return (
+      <div style={S.appShell}>
+        <div style={S.topBar}>Haki fit</div>
+        <div style={S.loadingWrap}>
+          <div style={S.loadingBar} />
+          <div style={{ ...S.caption, marginTop: 12 }}>Chargement de tes données…</div>
+        </div>
+        <FontStyles />
+      </div>
+    );
+  }
+
+  const activeBlock = blocks.find((b) => b.active);
+  const visiblePrograms = programs.filter((p) => !p.deleted && p.blockId === activeBlock?.id);
+
+  return (
+    <div style={S.appShell}>
+      <FontStyles />
+      <div style={S.topBar}>Haki fit</div>
+      <div style={S.screen}>
+        {activeProgram ? (
+          <LogSession
+            program={activeProgram}
+            blocks={blocks}
+            sessions={sessions}
+            goals={goals}
+            onSaveGoal={saveGoal}
+            onCancel={() => setActiveProgram(null)}
+            onFinish={finishSession}
+          />
+        ) : programForm ? (
+          <ProgramForm
+            mode={programForm.mode}
+            initialProgram={programForm.program}
+            defaultBlockId={programForm.blockId}
+            blocks={blocks}
+            onCancel={() => setProgramForm(null)}
+            onCreate={addProgram}
+            onUpdate={updateProgram}
+          />
+        ) : historyExercise ? (
+          <ExerciseHistory
+            exercise={historyExercise}
+            sessions={sessions}
+            onBack={() => setHistoryExercise(null)}
+          />
+        ) : historySession ? (
+          <SessionDetailView
+            session={historySession}
+            exerciseIndex={exerciseIndex}
+            onBack={() => setHistorySession(null)}
+            onOpenExercise={(ex) => setHistoryExercise(ex)}
+            coachPhone={coachPhone}
+            onSaveCoachPhone={updateCoachPhone}
+          />
+        ) : showBodyweight ? (
+          <BodyweightView
+            bodyweight={bodyweight}
+            onAdd={addBodyweight}
+            onDelete={deleteBodyweight}
+            onBack={() => setShowBodyweight(false)}
+          />
+        ) : (
+          <>
+            {tab === "home" && (
+              <HomeView
+                programs={visiblePrograms}
+                allPrograms={programs}
+                activeBlock={activeBlock}
+                sessions={sessions}
+                bodyweight={bodyweight}
+                onStart={(p) => setActiveProgram(p)}
+                onManage={() => setTab("programs")}
+                onOpenBodyweight={() => setShowBodyweight(true)}
+              />
+            )}
+            {tab === "programs" && (
+              <ProgramsView
+                programs={programs}
+                blocks={blocks}
+                onStart={(p) => setActiveProgram(p)}
+                onCreateProgram={(blockId) => setProgramForm({ mode: "create", blockId })}
+                onEditProgram={(program) => setProgramForm({ mode: "edit", program })}
+                onDeleteProgram={deleteProgram}
+                onDuplicateProgram={duplicateProgram}
+                onCreateBlock={addBlock}
+                onSetActiveBlock={setActiveBlock}
+                onImportCoachProgram={importCoachProgram}
+                onImportCoachGoals={importCoachGoals}
+              />
+            )}
+            {tab === "history" && (
+              <HistoryView
+                programs={programs}
+                blocks={blocks}
+                sessions={sessions}
+                exerciseIndex={exerciseIndex}
+                onOpenExercise={(ex) => setHistoryExercise(ex)}
+                onOpenSession={(s) => setHistorySession(s)}
+                onResetHistory={resetHistory}
+                onExportBackup={exportBackup}
+                onImportBackup={importBackup}
+              />
+            )}
+            {tab === "coach" && (
+              activeAthleteId ? (
+                <AthleteDetailView
+                  athlete={coachAthletes.find((a) => a.id === activeAthleteId)}
+                  onBack={() => setActiveAthleteId(null)}
+                  onUpdateAthlete={updateAthlete}
+                  onDeleteAthlete={deleteAthlete}
+                />
+              ) : (
+                <CoachView
+                  athletes={coachAthletes}
+                  onOpenAthlete={(id) => setActiveAthleteId(id)}
+                  onAddAthlete={addAthlete}
+                />
+              )
+            )}
+          </>
+        )}
+      </div>
+      {!activeProgram && !historyExercise && !historySession && !programForm && !showBodyweight && (
+        <BottomNav tab={tab} setTab={setTab} />
+      )}
+    </div>
+  );
+}
+
+/* ---------- Home ---------- */
+
+function computeStreak(sessions) {
+  if (!sessions.length) return 0;
+  const weekKey = (d) => {
+    const date = new Date(d);
+    const day = (date.getDay() + 6) % 7; // 0 = lundi
+    const monday = new Date(date);
+    monday.setDate(date.getDate() - day);
+    monday.setHours(0, 0, 0, 0);
+    return monday.toISOString().slice(0, 10);
+  };
+  const weeksWithSessions = new Set(sessions.map((s) => weekKey(s.date)));
+  let cursor = new Date();
+  if (!weeksWithSessions.has(weekKey(cursor))) {
+    cursor.setDate(cursor.getDate() - 7); // grace : la semaine en cours n'est pas encore "cassée"
+  }
+  let streak = 0;
+  while (weeksWithSessions.has(weekKey(cursor))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 7);
+  }
+  return streak;
+}
+
+function computeMuscleBalance(sessions, exerciseIndex) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 30);
+  const counts = {};
+  sessions
+    .filter((s) => new Date(s.date) >= cutoff)
+    .forEach((s) => {
+      Object.keys(s.entries).forEach((exId) => {
+        const def = exerciseIndex[exId];
+        if (!def || def.type === "cardio") return;
+        const muscle = def.muscle || "Autre";
+        counts[muscle] = (counts[muscle] || 0) + 1;
+      });
+    });
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const max = entries.length ? entries[0][1] : 1;
+  return { entries, max };
+}
+
+function HomeView({ programs, allPrograms, activeBlock, sessions, bodyweight, onStart, onManage, onOpenBodyweight }) {
+  const sorted = [...sessions].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const last = sorted[0];
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const thisWeek = sessions.filter((s) => new Date(s.date) >= weekAgo);
+  const streak = computeStreak(sessions);
+
+  const exerciseIndex = useMemo(() => {
+    const idx = {};
+    allPrograms.forEach((p) => p.exercises.forEach((e) => (idx[e.id] = e)));
+    return idx;
+  }, [allPrograms]);
+  const { entries: muscleEntries, max: muscleMax } = useMemo(
+    () => computeMuscleBalance(sessions, exerciseIndex),
+    [sessions, exerciseIndex]
+  );
+
+  const lastWeight = [...bodyweight].sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+
+  const idxInVisible = programs.findIndex((p) => p.id === last?.programId);
+  const nextProgram = idxInVisible >= 0 ? programs[(idxInVisible + 1) % programs.length] : programs[0];
+
+  return (
+    <div style={S.page}>
+      <div style={S.brand}>
+        {activeBlock ? (
+          <>
+            <div style={S.caption}>Programme actuel :</div>
+            <div style={S.pageTitle}>{activeBlock.name}</div>
+          </>
+        ) : (
+          <div style={S.pageTitle}>ton carnet de musculation</div>
+        )}
+      </div>
+
+      <div style={S.statRow}>
+        <div style={S.statCard}>
+          <div style={S.statValue}>{thisWeek.length}</div>
+          <div style={S.statLabel}>séances / 7j</div>
+        </div>
+        <div style={S.statCard}>
+          <div style={S.statValue}>🔥 {streak}</div>
+          <div style={S.statLabel}>semaine{streak > 1 ? "s" : ""} d'affilée</div>
+        </div>
+      </div>
+
+      {programs.length > 0 ? (
+        <>
+          <div style={S.sectionLabel}>Prochaine séance suggérée</div>
+          <button style={S.heroCard} onClick={() => onStart(nextProgram)}>
+            <div>
+              <div style={S.heroTitle}>{nextProgram.name}</div>
+              <div style={S.caption}>{nextProgram.exercises.length} exercices</div>
+            </div>
+            <div style={S.heroGo}>
+              <Dumbbell size={22} strokeWidth={2.2} />
+            </div>
+          </button>
+
+          <div style={S.sectionLabel}>Toutes les séances de ce programme</div>
+          <div style={S.programList}>
+            {programs.map((p) => (
+              <button key={p.id} style={S.programRowGlow} onClick={() => onStart(p)}>
+                <span style={S.programRowName}>{p.name}</span>
+                <span style={S.caption}>{p.exercises.length} ex.</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div style={S.emptyStateCard}>
+          <div style={{ marginBottom: 8 }}>Aucune séance active pour le moment.</div>
+          <button style={S.startProgramBtn} onClick={onManage}>
+            Gérer mes programmes
+          </button>
+        </div>
+      )}
+
+      {last && (
+        <>
+          <div style={S.sectionLabel}>Dernière séance</div>
+          <div style={S.lastSessionCard}>
+            <div style={S.lastSessionTop}>
+              <span style={{ fontWeight: 700 }}>{last.programName || "Séance"}</span>
+              <span style={S.caption}>{fmtDate(last.date)} · {fmtTime(last.date)}</span>
+            </div>
+            {last.durationSeconds && (
+              <div style={{ ...S.caption, marginTop: 4 }}>Durée : {fmtDurationLong(last.durationSeconds)}</div>
+            )}
+          </div>
+        </>
+      )}
+
+      <div style={S.sectionLabel}>Poids de corps</div>
+      <button style={S.bodyweightCard} onClick={onOpenBodyweight}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 18 }}>
+            {lastWeight ? `${lastWeight.weight} kg` : "Pas encore de mesure"}
+          </div>
+          <div style={S.caption}>{lastWeight ? `Le ${fmtDate(lastWeight.date)}` : "Ajoute ta première pesée"}</div>
+        </div>
+        <span style={S.caption}>Voir →</span>
+      </button>
+
+      {muscleEntries.length > 0 && (
+        <>
+          <div style={S.sectionLabel}>Équilibre musculaire (30 derniers jours)</div>
+          <div style={S.muscleBalanceCard}>
+            {muscleEntries.map(([muscle, count]) => (
+              <div key={muscle} style={S.muscleRow}>
+                <div style={S.muscleRowLabel}>
+                  <span>{muscle}</span>
+                  <span style={S.caption}>{count}×</span>
+                </div>
+                <div style={S.muscleBarTrack}>
+                  <div style={{ ...S.muscleBarFill, width: `${Math.max(6, (count / muscleMax) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Programs ---------- */
+
+function ProgramsView({ programs, blocks, onStart, onCreateProgram, onEditProgram, onDeleteProgram, onDuplicateProgram, onCreateBlock, onSetActiveBlock, onImportCoachProgram, onImportCoachGoals }) {
+  const activeBlock = blocks.find((b) => b.active);
+  const [selectedBlockId, setSelectedBlockId] = useState(activeBlock?.id || blocks[0]?.id);
+  const [open, setOpen] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [showNewBlock, setShowNewBlock] = useState(false);
+  const [newBlockName, setNewBlockName] = useState("");
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importStatus, setImportStatus] = useState(null);
+
+  const selectedBlock = blocks.find((b) => b.id === selectedBlockId) || activeBlock;
+  const blockPrograms = programs.filter((p) => !p.deleted && p.blockId === selectedBlock?.id);
+
+  function handleCreateBlock() {
+    if (!newBlockName.trim()) return;
+    const id = onCreateBlock(newBlockName.trim());
+    setSelectedBlockId(id);
+    setNewBlockName("");
+    setShowNewBlock(false);
+  }
+
+  function handleImport() {
+    const parsed = unpackPayload(importText);
+    if (!parsed) {
+      setImportStatus("error");
+      return;
+    }
+    if (parsed.type === "PROGRAM") {
+      const newBlockId = onImportCoachProgram(parsed.data, parsed.data.coachName);
+      setSelectedBlockId(newBlockId);
+      setImportStatus("program");
+    } else if (parsed.type === "GOALS") {
+      onImportCoachGoals(parsed.data);
+      setImportStatus("goals");
+    } else {
+      setImportStatus("error");
+    }
+    setImportText("");
+    setTimeout(() => setImportStatus(null), 3000);
+  }
+
+  return (
+    <div style={S.page}>
+      <div style={S.pageTitle}>Programmes d'entraînement</div>
+      <div style={{ ...S.caption, marginBottom: 12 }}>
+        Un programme regroupe plusieurs séances. Un seul programme est suivi à la fois — les autres restent en pause, avec leur historique intact.
+      </div>
+
+      <div style={S.blockChipsRow}>
+        {blocks.map((b) => (
+          <button
+            key={b.id}
+            style={{ ...S.blockChip, ...(selectedBlockId === b.id ? S.blockChipSelected : {}) }}
+            onClick={() => setSelectedBlockId(b.id)}
+          >
+            {b.active && <span style={S.activeDot} />}
+            {b.coached ? "🎓 " : ""}
+            {b.name}
+          </button>
+        ))}
+        <button style={S.blockChipAdd} onClick={() => setShowNewBlock((v) => !v)}>
+          <Plus size={14} />
+        </button>
+        <button style={S.blockChipAdd} onClick={() => setShowImport((v) => !v)}>
+          📥
+        </button>
+      </div>
+
+      {showImport && (
+        <div style={S.segmentsBox}>
+          <div style={S.goalInputLabel}>
+            Colle ici ce que ton coach t'a envoyé sur WhatsApp (programme ou objectifs) :
+          </div>
+          <textarea
+            style={{ ...S.commentInput, marginBottom: 8 }}
+            rows={4}
+            placeholder="Colle le message reçu ici..."
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+          />
+          <button style={S.createBtn} onClick={handleImport}>
+            Importer
+          </button>
+          {importStatus === "program" && <div style={S.exportStatus}>Programme importé ✓</div>}
+          {importStatus === "goals" && <div style={S.exportStatus}>Objectifs mis à jour ✓</div>}
+          {importStatus === "error" && <div style={S.exportStatusError}>Texte non reconnu — vérifie le message collé.</div>}
+        </div>
+      )}
+
+      {showNewBlock && (
+        <div style={S.newBlockRow}>
+          <input
+            style={S.textInput}
+            placeholder="Nom du programme (ex : Bloc force été 2026)"
+            value={newBlockName}
+            onChange={(e) => setNewBlockName(e.target.value)}
+          />
+          <button style={S.goalSaveBtn} onClick={handleCreateBlock}>
+            <Check size={16} />
+          </button>
+        </div>
+      )}
+
+      {selectedBlock && selectedBlock.id !== activeBlock?.id && (
+        <div style={S.notActiveBanner}>
+          <span>Ce programme n'est pas suivi actuellement.</span>
+          <button style={S.activateBtn} onClick={() => onSetActiveBlock(selectedBlock.id)}>
+            Suivre ce programme
+          </button>
+        </div>
+      )}
+
+      <div style={{ height: 8 }} />
+
+      {blockPrograms.length === 0 && (
+        <div style={{ ...S.caption, margin: "12px 0" }}>Pas encore de séance dans ce programme.</div>
+      )}
+
+      {blockPrograms.map((p) => (
+        <div key={p.id} style={S.programBlock}>
+          <button style={S.programBlockHeader} onClick={() => setOpen(open === p.id ? null : p.id)}>
+            <span style={S.programBlockTitle}>{p.name}</span>
+            <span style={S.caption}>{open === p.id ? "−" : "+"}</span>
+          </button>
+          {open === p.id && (
+            <div style={S.programBlockBody}>
+              {p.exercises.map((ex) => (
+                <div key={ex.id} style={S.exRow}>
+                  <div>
+                    <div style={S.exRowName}>{ex.superset ? "🔗 " : ""}{ex.name}</div>
+                    <div style={S.caption}>{ex.muscle}</div>
+                    {ex.type === "cardio" ? (
+                      <div style={S.caption}>Cardio</div>
+                    ) : (
+                      <>
+                        <div style={S.caption}>Fourchette : {ex.repMin}-{ex.repMax} reps · {ex.sets} séries</div>
+                        {ex.restSeconds ? <div style={S.caption}>Repos : {fmtRestTime(ex.restSeconds)}</div> : null}
+                      </>
+                    )}
+                    {ex.superset && <div style={S.caption}>Enchaîné avec l'exercice précédent (superset)</div>}
+                    {ex.note && <div style={S.exNote}>{ex.note}</div>}
+                  </div>
+                </div>
+              ))}
+              <button style={S.startProgramBtn} onClick={() => onStart(p)}>
+                Démarrer cette séance
+              </button>
+              <button style={S.editProgramBtn} onClick={() => onEditProgram(p)}>
+                Modifier cette séance
+              </button>
+              <button style={S.editProgramBtn} onClick={() => onDuplicateProgram(p.id)}>
+                Dupliquer cette séance
+              </button>
+              {confirmDelete === p.id ? (
+                <div style={S.confirmDeleteRow}>
+                  <span style={S.caption}>Supprimer « {p.name} » ?</span>
+                  <button style={S.confirmDeleteBtn} onClick={() => { onDeleteProgram(p.id); setConfirmDelete(null); }}>
+                    Oui, supprimer
+                  </button>
+                  <button style={S.cancelDeleteBtn} onClick={() => setConfirmDelete(null)}>
+                    Annuler
+                  </button>
+                </div>
+              ) : (
+                <button style={S.deleteProgramBtn} onClick={() => setConfirmDelete(p.id)}>
+                  <Trash2 size={13} /> Supprimer cette séance
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+
+      <button style={S.createBtn} onClick={() => onCreateProgram(selectedBlock?.id)}>
+        <Plus size={16} /> Créer une séance dans ce programme
+      </button>
+    </div>
+  );
+}
+
+/* ---------- Create / edit a program (séance) ---------- */
+
+function blankExercise() {
+  return { id: uid(), name: "", muscle: "", type: "muscu", repMin: "9", repMax: "12", sets: "3", restSeconds: "90", note: "", segments: [], superset: false };
+}
+function blankSegment() {
+  return { id: uid(), duration: "", speed: "", incline: "" };
+}
+
+function ProgramForm({ mode, initialProgram, defaultBlockId, blocks, onCancel, onCreate, onUpdate }) {
+  const isEdit = mode === "edit";
+  const [name, setName] = useState(initialProgram?.name || "");
+  const [blockId, setBlockId] = useState(initialProgram?.blockId || defaultBlockId || blocks[0]?.id);
+  const [exercises, setExercises] = useState(() => {
+    if (initialProgram) {
+      return initialProgram.exercises.map((e) => ({
+        id: e.id,
+        name: e.name,
+        muscle: e.muscle,
+        type: e.type || "muscu",
+        repMin: String(e.repMin ?? 9),
+        repMax: String(e.repMax ?? 12),
+        sets: String(e.sets ?? 3),
+        restSeconds: String(e.restSeconds ?? 90),
+        note: e.note || "",
+        superset: !!e.superset,
+        segments: (e.segments || []).map((seg) => ({
+          id: uid(),
+          duration: String(seg.duration ?? ""),
+          speed: seg.speed != null ? String(seg.speed) : "",
+          incline: seg.incline != null ? String(seg.incline) : "",
+        })),
+      }));
+    }
+    return [blankExercise()];
+  });
+
+  function updateExercise(id, field, value) {
+    setExercises((exs) => exs.map((e) => (e.id === id ? { ...e, [field]: value } : e)));
+  }
+  function addExercise() {
+    setExercises((exs) => [...exs, blankExercise()]);
+  }
+  function removeExercise(id) {
+    setExercises((exs) => exs.filter((e) => e.id !== id));
+  }
+  function moveExercise(id, direction) {
+    setExercises((exs) => {
+      const idx = exs.findIndex((e) => e.id === id);
+      const swapWith = idx + direction;
+      if (swapWith < 0 || swapWith >= exs.length) return exs;
+      const next = [...exs];
+      [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
+      return next;
+    });
+  }
+  function addSegment(exId) {
+    setExercises((exs) => exs.map((e) => (e.id === exId ? { ...e, segments: [...e.segments, blankSegment()] } : e)));
+  }
+  function updateSegment(exId, segId, field, value) {
+    setExercises((exs) =>
+      exs.map((e) =>
+        e.id === exId ? { ...e, segments: e.segments.map((s) => (s.id === segId ? { ...s, [field]: value } : s)) } : e
+      )
+    );
+  }
+  function removeSegment(exId, segId) {
+    setExercises((exs) =>
+      exs.map((e) => (e.id === exId ? { ...e, segments: e.segments.filter((s) => s.id !== segId) } : e))
+    );
+  }
+
+  const canSave = name.trim().length > 0 && exercises.length > 0 && exercises.every((e) => e.name.trim().length > 0);
+
+  function handleSave() {
+    const program = {
+      id: initialProgram?.id || uid(),
+      name: name.trim(),
+      blockId,
+      exercises: exercises.map((e, idx) => {
+        if (e.type === "cardio") {
+          const segments = (e.segments || [])
+            .filter((s) => s.duration !== "")
+            .map((s) => ({
+              duration: Number(s.duration) || 0,
+              speed: s.speed !== "" ? Number(s.speed) : null,
+              incline: s.incline !== "" ? Number(s.incline) : null,
+            }));
+          return {
+            id: e.id,
+            name: e.name.trim(),
+            muscle: e.muscle.trim() || "Cardio",
+            type: "cardio",
+            ...(segments.length ? { segments } : {}),
+            ...(idx > 0 && e.superset ? { superset: true } : {}),
+            ...(e.note.trim() ? { note: e.note.trim() } : {}),
+          };
+        }
+        return {
+          id: e.id,
+          name: e.name.trim(),
+          muscle: e.muscle.trim() || "—",
+          type: "muscu",
+          repMin: Number(e.repMin) || 1,
+          repMax: Math.max(Number(e.repMax) || Number(e.repMin) || 1, Number(e.repMin) || 1),
+          sets: Number(e.sets) || 1,
+          restSeconds: Number(e.restSeconds) || 0,
+          ...(idx > 0 && e.superset ? { superset: true } : {}),
+          ...(e.note.trim() ? { note: e.note.trim() } : {}),
+        };
+      }),
+    };
+    if (isEdit) onUpdate(program);
+    else onCreate(program);
+  }
+
+  return (
+    <div style={S.page}>
+      <button style={S.backBtn} onClick={onCancel}>
+        <X size={18} /> Annuler
+      </button>
+      <div style={S.pageTitle}>{isEdit ? "Modifier la séance" : "Nouvelle séance"}</div>
+      <div style={{ ...S.caption, marginBottom: 14 }}>
+        {isEdit ? "Ajuste le nom, les exercices ou le programme associé." : "Donne-lui un nom et ajoute tes exercices."}
+      </div>
+
+      <input
+        style={S.textInput}
+        placeholder="Nom de la séance (ex : Push, Full body...)"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+
+      {blocks.length > 1 && (
+        <select style={S.selectInput} value={blockId} onChange={(e) => setBlockId(e.target.value)}>
+          {blocks.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}{b.active ? " (actif)" : ""}
+            </option>
+          ))}
+        </select>
+      )}
+
+      <div style={{ height: 6 }} />
+
+      {exercises.map((ex, idx) => (
+        <div key={ex.id} style={S.newExerciseCard}>
+          <div style={S.newExerciseHead}>
+            <span style={S.sectionLabel}>Exercice {idx + 1}</span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button style={S.reorderBtn} disabled={idx === 0} onClick={() => moveExercise(ex.id, -1)}>
+                ↑
+              </button>
+              <button style={S.reorderBtn} disabled={idx === exercises.length - 1} onClick={() => moveExercise(ex.id, 1)}>
+                ↓
+              </button>
+              {exercises.length > 1 && (
+                <button style={S.setRemoveBtn} onClick={() => removeExercise(ex.id)}>
+                  <Minus size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {idx > 0 && (
+            <label style={S.supersetCheckRow}>
+              <input
+                type="checkbox"
+                checked={!!ex.superset}
+                onChange={(e) => updateExercise(ex.id, "superset", e.target.checked)}
+              />
+              🔗 Enchaîné avec l'exercice précédent (superset, pas de repos entre les deux)
+            </label>
+          )}
+
+          <div style={S.typeToggleRow}>
+            <button
+              style={{ ...S.typePill, ...(ex.type !== "cardio" ? S.typePillActive : {}) }}
+              onClick={() => updateExercise(ex.id, "type", "muscu")}
+            >
+              Muscu
+            </button>
+            <button
+              style={{ ...S.typePill, ...(ex.type === "cardio" ? S.typePillActive : {}) }}
+              onClick={() => updateExercise(ex.id, "type", "cardio")}
+            >
+              Cardio
+            </button>
+          </div>
+
+          <input
+            style={S.textInput}
+            placeholder={ex.type === "cardio" ? "Nom (ex : Vélo, Course, Corde à sauter...)" : "Nom de l'exercice"}
+            value={ex.name}
+            onChange={(e) => updateExercise(ex.id, "name", e.target.value)}
+          />
+          <input
+            style={S.textInput}
+            placeholder={ex.type === "cardio" ? "Catégorie (ex : Cardio, HIIT...)" : "Muscle ciblé (ex : Pectoraux)"}
+            value={ex.muscle}
+            onChange={(e) => updateExercise(ex.id, "muscle", e.target.value)}
+          />
+
+          {ex.type !== "cardio" && (
+            <>
+              <div style={S.stackedFieldCol}>
+                <label style={S.stackedLabel}>
+                  Séries
+                  <input
+                    style={S.stackedInput}
+                    inputMode="numeric"
+                    value={ex.sets}
+                    onChange={(e) => updateExercise(ex.id, "sets", e.target.value.replace(/[^0-9]/g, ""))}
+                  />
+                </label>
+                <label style={S.stackedLabel}>
+                  Reps min
+                  <input
+                    style={S.stackedInput}
+                    inputMode="numeric"
+                    value={ex.repMin}
+                    onChange={(e) => updateExercise(ex.id, "repMin", e.target.value.replace(/[^0-9]/g, ""))}
+                  />
+                </label>
+                <label style={S.stackedLabel}>
+                  Reps max
+                  <input
+                    style={S.stackedInput}
+                    inputMode="numeric"
+                    value={ex.repMax}
+                    onChange={(e) => updateExercise(ex.id, "repMax", e.target.value.replace(/[^0-9]/g, ""))}
+                  />
+                </label>
+              </div>
+              <div style={S.newExerciseRow}>
+                <label style={S.smallLabel}>
+                  Repos entre séries (sec)
+                  <input
+                    style={S.smallInput}
+                    inputMode="numeric"
+                    value={ex.restSeconds}
+                    onChange={(e) => updateExercise(ex.id, "restSeconds", e.target.value.replace(/[^0-9]/g, ""))}
+                  />
+                </label>
+              </div>
+            </>
+          )}
+
+          {ex.type === "cardio" && (
+            <div style={S.segmentsBox}>
+              <div style={S.goalInputLabel}>
+                Programme par intervalles (optionnel — laisse vide pour un cardio simple avec chrono libre)
+              </div>
+              {ex.segments.length > 0 && (
+                <div style={S.setsHeader}>
+                  <span style={S.setsHeaderCol}>Segment</span>
+                  <span style={S.setsHeaderCol}>Min</span>
+                  <span style={S.setsHeaderCol}>km/h</span>
+                  <span style={S.setsHeaderCol}>Pente %</span>
+                  <span style={{ width: 28 }} />
+                </div>
+              )}
+              {ex.segments.map((seg, si) => (
+                <div key={seg.id} style={S.setRow}>
+                  <span style={S.setNum}>{si + 1}</span>
+                  <input
+                    style={S.setInput}
+                    inputMode="numeric"
+                    placeholder="min"
+                    value={seg.duration}
+                    onChange={(e) => updateSegment(ex.id, seg.id, "duration", e.target.value.replace(/[^0-9]/g, ""))}
+                  />
+                  <input
+                    style={S.setInput}
+                    inputMode="decimal"
+                    placeholder="km/h"
+                    value={seg.speed}
+                    onChange={(e) => updateSegment(ex.id, seg.id, "speed", e.target.value.replace(/[^0-9.,]/g, ""))}
+                  />
+                  <input
+                    style={S.setInput}
+                    inputMode="decimal"
+                    placeholder="%"
+                    value={seg.incline}
+                    onChange={(e) => updateSegment(ex.id, seg.id, "incline", e.target.value.replace(/[^0-9.,]/g, ""))}
+                  />
+                  <button style={S.setRemoveBtn} onClick={() => removeSegment(ex.id, seg.id)}>
+                    <Minus size={14} />
+                  </button>
+                </div>
+              ))}
+              <button style={S.addSetBtn} onClick={() => addSegment(ex.id)}>
+                <Plus size={14} /> Ajouter un segment
+              </button>
+            </div>
+          )}
+
+          <input
+            style={S.textInput}
+            placeholder="Note (optionnel — ex : dropset, tempo...)"
+            value={ex.note}
+            onChange={(e) => updateExercise(ex.id, "note", e.target.value)}
+          />
+        </div>
+      ))}
+
+      <button style={S.addSetBtn} onClick={addExercise}>
+        <Plus size={14} /> Ajouter un exercice
+      </button>
+
+      <button
+        style={{ ...S.finishBtn, opacity: canSave ? 1 : 0.4, marginTop: 18 }}
+        disabled={!canSave}
+        onClick={handleSave}
+      >
+        <Check size={18} /> {isEdit ? "Enregistrer les modifications" : "Créer la séance"}
+      </button>
+      <div style={{ height: 24 }} />
+    </div>
+  );
+}
+
+/* ---------- History (list) ---------- */
+
+function HistoryView({ programs, blocks, sessions, exerciseIndex, onOpenExercise, onOpenSession, onResetHistory, onExportBackup, onImportBackup }) {
+  const activeBlock = blocks.find((b) => b.active);
+  const [selectedBlockId, setSelectedBlockId] = useState(activeBlock?.id || blocks[0]?.id);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [search, setSearch] = useState("");
+  const [backupStatus, setBackupStatus] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const programById = useMemo(() => {
+    const idx = {};
+    programs.forEach((p) => (idx[p.id] = p));
+    return idx;
+  }, [programs]);
+
+  const sessionsByBlock = (blockId) => sessions.filter((s) => programById[s.programId]?.blockId === blockId);
+
+  const selectedBlock = blocks.find((b) => b.id === selectedBlockId) || activeBlock;
+  const blockSessions = [...sessionsByBlock(selectedBlock?.id)].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const query = search.trim().toLowerCase();
+  const searchResults = query
+    ? [...sessions]
+        .filter((s) =>
+          Object.keys(s.entries).some((exId) => (exerciseIndex[exId]?.name || "").toLowerCase().includes(query))
+        )
+        .sort((a, b) => (a.date < b.date ? 1 : -1))
+    : null;
+
+  function handleImportClick() {
+    fileInputRef.current?.click();
+  }
+
+  function handleFileChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        onImportBackup(data);
+        setBackupStatus("imported");
+      } catch (err) {
+        setBackupStatus("import-error");
+      }
+      setTimeout(() => setBackupStatus(null), 2500);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  return (
+    <div style={S.page}>
+      <div style={S.pageTitle}>Historique</div>
+
+      <input
+        style={S.textInput}
+        placeholder="🔍 Rechercher un exercice (tous programmes)"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+
+      {searchResults ? (
+        <>
+          <div style={{ ...S.caption, marginBottom: 12 }}>
+            {searchResults.length} séance{searchResults.length > 1 ? "s" : ""} contenant « {search.trim()} »
+          </div>
+          <div style={S.programList}>
+            {searchResults.map((s) => {
+              const nbExercises = Object.keys(s.entries).length;
+              return (
+                <button key={s.id} style={S.sessionLogRow} onClick={() => onOpenSession(s)}>
+                  <div>
+                    <div style={S.exRowName}>{s.programName || "Séance"}</div>
+                    <div style={S.caption}>{s.blockName ? `${s.blockName} · ` : ""}{nbExercises} exercices</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={S.caption}>{fmtDate(s.date)}</div>
+                  </div>
+                </button>
+              );
+            })}
+            {searchResults.length === 0 && <div style={S.caption}>Aucune séance ne contient cet exercice.</div>}
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...S.caption, marginBottom: 12 }}>Choisis un programme pour voir ses séances.</div>
+
+          <div style={S.blockChipsRow}>
+            {blocks.map((b) => (
+              <button
+                key={b.id}
+                style={{ ...S.blockChip, ...(selectedBlockId === b.id ? S.blockChipSelected : {}) }}
+                onClick={() => setSelectedBlockId(b.id)}
+              >
+                {b.active && <span style={S.activeDot} />}
+                {b.name}
+              </button>
+            ))}
+            {blocks.length === 0 && <div style={S.caption}>Aucun programme pour l'instant.</div>}
+          </div>
+
+          <div style={{ ...S.caption, marginBottom: 12 }}>
+            {blockSessions.length} séance{blockSessions.length > 1 ? "s" : ""} enregistrée{blockSessions.length > 1 ? "s" : ""}
+          </div>
+
+          <div style={S.programList}>
+            {blockSessions.map((s) => {
+              const nbExercises = Object.keys(s.entries).length;
+              const tonnage = Object.values(s.entries).flat().reduce((a, set) => a + set.reps * set.poids, 0);
+              return (
+                <button key={s.id} style={S.sessionLogRow} onClick={() => onOpenSession(s)}>
+                  <div>
+                    <div style={S.exRowName}>{s.programName || "Séance"}</div>
+                    <div style={S.caption}>
+                      {nbExercises} exercices · {Math.round(tonnage).toLocaleString("fr-FR")} kg
+                      {s.durationSeconds ? ` · ${fmtDurationLong(s.durationSeconds)}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={S.caption}>{fmtDate(s.date)}</div>
+                    <div style={S.caption}>{fmtTime(s.date)}</div>
+                  </div>
+                </button>
+              );
+            })}
+            {blockSessions.length === 0 && <div style={S.caption}>Aucune séance enregistrée dans ce programme.</div>}
+          </div>
+          <ExportButtons sessions={blockSessions} exerciseIndex={exerciseIndex} label={`Exporter « ${selectedBlock?.name} »`} />
+        </>
+      )}
+
+      <div style={S.exportBox}>
+        <div style={S.exportLabel}>Sauvegarde complète de l'app</div>
+        <div style={S.exportRow}>
+          <button
+            style={S.exportBtn}
+            onClick={() => {
+              const ok = onExportBackup();
+              setBackupStatus(ok ? "exported" : "export-error");
+              setTimeout(() => setBackupStatus(null), 2500);
+            }}
+          >
+            💾 Sauvegarder
+          </button>
+          <button style={S.exportBtnGhost} onClick={handleImportClick}>
+            📂 Restaurer
+          </button>
+          <input ref={fileInputRef} type="file" accept="application/json" style={{ display: "none" }} onChange={handleFileChange} />
+        </div>
+        {backupStatus === "exported" && <div style={S.exportStatus}>Fichier téléchargé — garde-le en lieu sûr.</div>}
+        {backupStatus === "imported" && <div style={S.exportStatus}>Sauvegarde restaurée avec succès.</div>}
+        {(backupStatus === "export-error" || backupStatus === "import-error") && (
+          <div style={S.exportStatusError}>Échec — vérifie le fichier et réessaie.</div>
+        )}
+      </div>
+
+      {sessions.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {confirmReset ? (
+            <div style={S.confirmDeleteRow}>
+              <span style={S.caption}>Effacer les {sessions.length} séances enregistrées (tous programmes) ? Irréversible.</span>
+              <button style={S.confirmDeleteBtn} onClick={() => { onResetHistory(); setConfirmReset(false); }}>
+                Oui, tout effacer
+              </button>
+              <button style={S.cancelDeleteBtn} onClick={() => setConfirmReset(false)}>
+                Annuler
+              </button>
+            </div>
+          ) : (
+            <button style={S.deleteProgramBtn} onClick={() => setConfirmReset(true)}>
+              <Trash2 size={13} /> Effacer tout l'historique
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Session detail (one workout, seen from the history log) ---------- */
+
+function SessionDetailView({ session, exerciseIndex, onBack, onOpenExercise, coachPhone, onSaveCoachPhone }) {
+  const exIds = Object.keys(session.entries);
+  const tonnage = Object.values(session.entries)
+    .filter(Array.isArray)
+    .flat()
+    .reduce((a, set) => a + set.reps * set.poids, 0);
+  const [phoneDraft, setPhoneDraft] = useState(coachPhone || "");
+  const [editingPhone, setEditingPhone] = useState(!coachPhone);
+
+  function handleSend() {
+    const text = sessionSummaryText(session, exerciseIndex) + "\n" + packPayload("SESSION", { session });
+    window.open(buildWhatsAppLink(phoneDraft, text), "_blank");
+  }
+
+  return (
+    <div style={S.page}>
+      <button style={S.backBtn} onClick={onBack}>
+        <ChevronLeft size={18} /> Historique
+      </button>
+      <div style={S.pageTitle}>{session.programName || "Séance"}</div>
+      <div style={{ ...S.caption, marginBottom: 2 }}>
+        {session.blockName ? `${session.blockName} · ` : ""}
+        {new Date(session.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" })} à {fmtTime(session.date)}
+      </div>
+      <div style={{ ...S.caption, marginBottom: 16 }}>
+        {tonnage > 0 ? `${Math.round(tonnage).toLocaleString("fr-FR")} kg au total` : ""}
+        {session.durationSeconds ? `${tonnage > 0 ? " · " : ""}durée ${fmtDurationLong(session.durationSeconds)}` : ""}
+      </div>
+
+      {session.comment && (
+        <div style={S.commentDisplay}>
+          <span style={S.goalLabel}>Ressenti — </span>
+          {session.comment}
+        </div>
+      )}
+
+      <div style={S.programList}>
+        {exIds.map((exId) => {
+          const def = exerciseIndex[exId];
+          const entry = session.entries[exId];
+          const isCardio = !Array.isArray(entry);
+          return (
+            <div key={exId} style={S.historyRow}>
+              <div style={S.exRowName}>{def?.name || "Exercice supprimé"}</div>
+              {isCardio ? (
+                <div style={S.historySets}>
+                  {cardioSegments(entry).map((seg, i) => (
+                    <span key={i} style={S.setChip}>
+                      {seg.durationSeconds ? fmtDurationLong(seg.durationSeconds) : "0 min"}
+                      {seg.speed ? ` · ${seg.speed}km/h` : ""}
+                      {seg.incline ? ` · pente ${seg.incline}%` : ""}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={S.historySets}>
+                  {entry.map((s, j) => (
+                    <span key={j} style={S.setChip}>{s.reps}×{s.poids}kg</span>
+                  ))}
+                </div>
+              )}
+              {def && (
+                <button style={S.goalEditBtn} onClick={() => onOpenExercise(def)}>
+                  Voir la progression →
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {exIds.length === 0 && <div style={S.caption}>Aucun exercice enregistré pour cette séance.</div>}
+      </div>
+
+      <ExportButtons sessions={[session]} exerciseIndex={exerciseIndex} label="Exporter cette séance" />
+
+      <div style={S.exportBox}>
+        <div style={S.exportLabel}>Envoyer à mon coach</div>
+        {editingPhone ? (
+          <div style={S.goalInputRow}>
+            <input
+              style={S.goalInput}
+              placeholder="Numéro WhatsApp du coach (ex : 33612345678)"
+              value={phoneDraft}
+              onChange={(e) => setPhoneDraft(e.target.value.replace(/[^0-9+]/g, ""))}
+            />
+            <button
+              style={S.goalSaveBtn}
+              onClick={() => { onSaveCoachPhone(phoneDraft); setEditingPhone(false); }}
+            >
+              <Check size={16} />
+            </button>
+          </div>
+        ) : (
+          <div style={{ ...S.caption, marginBottom: 8 }}>
+            Coach : {coachPhone} <button style={S.goalEditBtn} onClick={() => setEditingPhone(true)}>modifier</button>
+          </div>
+        )}
+        <button style={S.exportBtn} onClick={handleSend}>
+          📱 Envoyer cette séance par WhatsApp
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Exercise history detail ---------- */
+
+/* ---------- Poids de corps ---------- */
+
+function BodyweightView({ bodyweight, onAdd, onDelete, onBack }) {
+  const [weight, setWeight] = useState("");
+  const sorted = [...bodyweight].sort((a, b) => (a.date < b.date ? -1 : 1));
+  const chartData = sorted.map((e) => ({ date: fmtDate(e.date), weight: e.weight }));
+
+  function handleAdd() {
+    const val = Number(String(weight).replace(",", "."));
+    if (!val) return;
+    onAdd({ date: new Date().toISOString().slice(0, 10), weight: val });
+    setWeight("");
+  }
+
+  return (
+    <div style={S.page}>
+      <button style={S.backBtn} onClick={onBack}>
+        <ChevronLeft size={18} /> Retour
+      </button>
+      <div style={S.pageTitle}>Poids de corps</div>
+      <div style={{ ...S.caption, marginBottom: 14 }}>Une pesée par jour, écrasée si tu la refais.</div>
+
+      <div style={S.goalInputRow}>
+        <input
+          style={S.goalInput}
+          inputMode="decimal"
+          placeholder="Poids aujourd'hui (kg)"
+          value={weight}
+          onChange={(e) => setWeight(e.target.value.replace(/[^0-9.,]/g, ""))}
+        />
+        <button style={S.goalSaveBtn} onClick={handleAdd}>
+          <Check size={16} />
+        </button>
+      </div>
+
+      {chartData.length > 1 && (
+        <>
+          <div style={S.sectionLabel}>Évolution</div>
+          <div style={S.chartCard}>
+            <MiniLineChart data={chartData} dataKey="weight" height={180} />
+          </div>
+        </>
+      )}
+
+      <div style={S.sectionLabel}>Historique</div>
+      <div style={S.programList}>
+        {[...sorted].reverse().map((e) => (
+          <div key={e.date} style={S.sessionLogRow}>
+            <span>{fmtDate(e.date)}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontWeight: 700 }}>{e.weight} kg</span>
+              <button style={S.setRemoveBtn} onClick={() => onDelete(e.date)}>
+                <Minus size={14} />
+              </button>
+            </div>
+          </div>
+        ))}
+        {sorted.length === 0 && <div style={S.caption}>Aucune pesée enregistrée.</div>}
+      </div>
+    </div>
+  );
+}
+
+
+function ExerciseHistory({ exercise, sessions, onBack, coachGoalValue, onSaveCoachGoal }) {
+  const isCardio = exercise.type === "cardio";
+  const [goalDraft, setGoalDraft] = useState(coachGoalValue || "");
+  const [goalSaved, setGoalSaved] = useState(false);
+
+  const data = sessions
+    .filter((s) => s.entries[exercise.id])
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+    .map((s) => {
+      const entry = s.entries[exercise.id];
+      if (isCardio) {
+        const segs = cardioSegments(entry);
+        const totalSec = segs.reduce((a, seg) => a + (seg.durationSeconds || 0), 0);
+        return {
+          date: fmtDate(s.date),
+          durationMin: Math.round(totalSec / 60),
+          segs,
+          rawDate: s.date,
+        };
+      }
+      const sets = entry;
+      const maxPoids = Math.max(...sets.map((x) => x.poids));
+      const volume = sets.reduce((a, x) => a + x.reps * x.poids, 0);
+      return { date: fmtDate(s.date), maxPoids, volume, sets, rawDate: s.date };
+    });
+
+  return (
+    <div style={S.page}>
+      <button style={S.backBtn} onClick={onBack}>
+        <ChevronLeft size={18} /> Historique
+      </button>
+      <div style={S.pageTitle}>{exercise.name}</div>
+      <div style={S.caption}>
+        {isCardio ? exercise.muscle : `${exercise.muscle} · ${exercise.sets} × ${exercise.repMin}-${exercise.repMax} reps`}
+      </div>
+
+      {data.length > 0 ? (
+        <>
+          <div style={S.sectionLabel}>{isCardio ? "Durée par séance (min)" : "Charge max par séance (kg)"}</div>
+          <div style={S.chartCard}>
+            <MiniLineChart data={data} dataKey={isCardio ? "durationMin" : "maxPoids"} height={180} />
+          </div>
+
+          <div style={S.sectionLabel}>Détail des séances</div>
+          <div style={S.programList}>
+            {[...data].reverse().map((d, i) => (
+              <div key={i} style={S.historyRow}>
+                <div style={S.caption}>{d.date}</div>
+                {isCardio ? (
+                  <div style={S.historySets}>
+                    {d.segs.map((seg, j) => (
+                      <span key={j} style={S.setChip}>
+                        {Math.round((seg.durationSeconds || 0) / 60)} min
+                        {seg.speed ? ` · ${seg.speed}km/h` : ""}
+                        {seg.incline ? ` · pente ${seg.incline}%` : ""}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={S.historySets}>
+                    {d.sets.map((s, j) => (
+                      <span key={j} style={S.setChip}>{s.reps}×{s.poids}kg</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div style={{ ...S.caption, marginTop: 24 }}>Pas encore de données pour cet exercice.</div>
+      )}
+
+      {onSaveCoachGoal && (
+        <div style={S.goalInputBox}>
+          <div style={S.goalInputLabel}>🎯 Objectif pour la semaine prochaine</div>
+          <div style={S.goalInputRow}>
+            <input
+              style={S.goalInput}
+              placeholder="ex : passer à 40 kg"
+              value={goalDraft}
+              onChange={(e) => setGoalDraft(e.target.value)}
+            />
+            <button
+              style={S.goalSaveBtn}
+              onClick={() => {
+                onSaveCoachGoal(goalDraft.trim());
+                setGoalSaved(true);
+                setTimeout(() => setGoalSaved(false), 1500);
+              }}
+            >
+              <Check size={16} />
+            </button>
+          </div>
+          {goalSaved && <div style={S.exportStatus}>Objectif enregistré ✓</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Log a session ---------- */
+
+/* ---------- Objectif pour la semaine prochaine (toujours visible, muscu et cardio) ---------- */
+
+function GoalBox({ exId, goalDrafts, setGoalDrafts, onSaveGoal, readOnly, coachName }) {
+  const [saved, setSaved] = useState(false);
+
+  if (readOnly) {
+    return (
+      <div style={S.goalInputBox}>
+        <div style={S.goalInputLabel}>🎯 Objectif fixé par {coachName || "ton coach"}</div>
+        <div style={{ color: "#FFFFFF", fontSize: 13.5 }}>
+          {goalDrafts[exId] ? goalDrafts[exId] : "Pas encore d'objectif reçu pour cet exercice."}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.goalInputBox}>
+      <div style={S.goalInputLabel}>🎯 Objectif pour la semaine prochaine</div>
+      <div style={S.goalInputRow}>
+        <input
+          style={S.goalInput}
+          placeholder="ex : passer à 37,5 kg / 8 km/h"
+          value={goalDrafts[exId] ?? ""}
+          onChange={(e) => setGoalDrafts((d) => ({ ...d, [exId]: e.target.value }))}
+        />
+        <button
+          style={S.goalSaveBtn}
+          onClick={() => {
+            onSaveGoal(exId, (goalDrafts[exId] ?? "").trim());
+            setSaved(true);
+            setTimeout(() => setSaved(false), 1500);
+          }}
+        >
+          <Check size={16} />
+        </button>
+      </div>
+      {saved && <div style={S.exportStatus}>Objectif enregistré ✓</div>}
+    </div>
+  );
+}
+
+function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, onFinish }) {
+  const prevSession = [...sessions]
+    .filter((s) => s.programId === program.id)
+    .sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+
+  const coachedBlock = blocks?.find((b) => b.id === program.blockId && b.coached) || null;
+
+  const [startTime] = useState(() => Date.now()); // figé au montage : l'heure de début réelle
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [comment, setComment] = useState("");
+
+  useEffect(() => {
+    const t = setInterval(() => setElapsedSec(Math.round((Date.now() - startTime) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [startTime]);
+
+  // Minuteur de repos (par exercice) : { [exId]: { endTime, notified } }
+  const [restTimers, setRestTimers] = useState({});
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setRestTimers((r) => {
+        let changed = false;
+        const next = { ...r };
+        Object.entries(r).forEach(([exId, timer]) => {
+          const remaining = Math.max(0, Math.round((timer.endTime - Date.now()) / 1000));
+          if (remaining === 0 && !timer.notified) {
+            next[exId] = { ...timer, notified: true };
+            changed = true;
+            if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+          }
+        });
+        return changed ? next : r;
+      });
+    }, 500);
+    return () => clearInterval(t);
+  }, []);
+
+  function startRest(exId, seconds) {
+    setRestTimers((r) => ({ ...r, [exId]: { endTime: Date.now() + seconds * 1000, notified: false } }));
+  }
+  function cancelRest(exId) {
+    setRestTimers((r) => {
+      const next = { ...r };
+      delete next[exId];
+      return next;
+    });
+  }
+  function restRemaining(exId) {
+    const t = restTimers[exId];
+    if (!t) return null;
+    return Math.max(0, Math.round((t.endTime - Date.now()) / 1000));
+  }
+
+  const [goalDrafts, setGoalDrafts] = useState(() => {
+    const init = {};
+    program.exercises.forEach((ex) => { init[ex.id] = goals?.[ex.id] || ""; });
+    return init;
+  });
+
+  const [draft, setDraft] = useState(() => {
+    const init = {};
+    program.exercises.filter((ex) => ex.type !== "cardio").forEach((ex) => {
+      const prevSets = prevSession?.entries[ex.id];
+      const n = Array.isArray(prevSets) ? prevSets.length : ex.sets;
+      init[ex.id] = Array.from({ length: n }, (_, i) => ({
+        reps: prevSets?.[i]?.reps ?? "",
+        poids: prevSets?.[i]?.poids ?? "",
+      }));
+    });
+    return init;
+  });
+
+  const [cardioLogs, setCardioLogs] = useState(() => {
+    const init = {};
+    program.exercises.filter((ex) => ex.type === "cardio").forEach((ex) => {
+      if (ex.segments && ex.segments.length > 0) {
+        init[ex.id] = {
+          mode: "planned",
+          segments: ex.segments.map((seg) => ({
+            id: uid(),
+            duration: String(seg.duration ?? ""),
+            speed: seg.speed != null ? String(seg.speed) : "",
+            incline: seg.incline != null ? String(seg.incline) : "",
+          })),
+        };
+      } else {
+        const prevEntry = prevSession?.entries[ex.id];
+        const prevSeg = !Array.isArray(prevEntry) ? cardioSegments(prevEntry)[0] : null;
+        init[ex.id] = {
+          mode: "simple",
+          running: false,
+          startedAt: null,
+          elapsedSeconds: 0,
+          speed: "",
+          incline: "",
+          prevSpeed: prevSeg?.speed ?? "",
+          prevIncline: prevSeg?.incline ?? "",
+        };
+      }
+    });
+    return init;
+  });
+
+  function toggleCardioTimer(exId) {
+    setCardioLogs((c) => {
+      const cur = c[exId];
+      if (cur.running) {
+        const added = Math.round((Date.now() - cur.startedAt) / 1000);
+        return { ...c, [exId]: { ...cur, running: false, startedAt: null, elapsedSeconds: cur.elapsedSeconds + added } };
+      }
+      return { ...c, [exId]: { ...cur, running: true, startedAt: Date.now() } };
+    });
+  }
+  function updateCardio(exId, field, value) {
+    setCardioLogs((c) => ({ ...c, [exId]: { ...c[exId], [field]: value } }));
+  }
+  function cardioDisplaySeconds(exId) {
+    const c = cardioLogs[exId];
+    if (!c) return 0;
+    return c.running ? c.elapsedSeconds + Math.round((Date.now() - c.startedAt) / 1000) : c.elapsedSeconds;
+  }
+  function updateCardioSegment(exId, segId, field, value) {
+    setCardioLogs((c) => ({
+      ...c,
+      [exId]: { ...c[exId], segments: c[exId].segments.map((s) => (s.id === segId ? { ...s, [field]: value } : s)) },
+    }));
+  }
+  function addCardioSegment(exId) {
+    setCardioLogs((c) => ({
+      ...c,
+      [exId]: { ...c[exId], segments: [...c[exId].segments, { id: uid(), duration: "", speed: "", incline: "" }] },
+    }));
+  }
+  function removeCardioSegment(exId, segId) {
+    setCardioLogs((c) => ({
+      ...c,
+      [exId]: { ...c[exId], segments: c[exId].segments.filter((s) => s.id !== segId) },
+    }));
+  }
+
+  function updateSet(exId, idx, field, value) {
+    setDraft((d) => {
+      const sets = d[exId].map((s, i) => (i === idx ? { ...s, [field]: value } : s));
+      return { ...d, [exId]: sets };
+    });
+  }
+  function addSet(exId) {
+    setDraft((d) => ({ ...d, [exId]: [...d[exId], { reps: "", poids: "" }] }));
+  }
+  function removeSet(exId, idx) {
+    setDraft((d) => ({ ...d, [exId]: d[exId].filter((_, i) => i !== idx) }));
+  }
+
+  function save() {
+    const entries = {};
+    Object.entries(draft).forEach(([exId, sets]) => {
+      const clean = sets
+        .filter((s) => s.reps !== "" && s.poids !== "")
+        .map((s) => ({ reps: Number(s.reps), poids: Number(s.poids) }));
+      if (clean.length) entries[exId] = clean;
+    });
+    Object.entries(cardioLogs).forEach(([exId, c]) => {
+      if (c.mode === "planned") {
+        const segments = c.segments
+          .filter((s) => s.duration !== "")
+          .map((s) => ({
+            durationSeconds: Math.round((Number(s.duration) || 0) * 60),
+            speed: s.speed !== "" ? Number(s.speed) : null,
+            incline: s.incline !== "" ? Number(s.incline) : null,
+          }));
+        if (segments.length) entries[exId] = { type: "cardio", segments };
+      } else {
+        const totalSec = c.running ? c.elapsedSeconds + Math.round((Date.now() - c.startedAt) / 1000) : c.elapsedSeconds;
+        if (totalSec > 0 || c.speed !== "" || c.incline !== "") {
+          entries[exId] = {
+            type: "cardio",
+            segments: [{ durationSeconds: totalSec, speed: c.speed !== "" ? Number(c.speed) : null, incline: c.incline !== "" ? Number(c.incline) : null }],
+          };
+        }
+      }
+    });
+    const blockName = blocks?.find((b) => b.id === program.blockId)?.name || "";
+    onFinish({
+      id: uid(),
+      programId: program.id,
+      programName: program.name,
+      blockName,
+      date: new Date(startTime).toISOString(),
+      durationSeconds: Math.round((Date.now() - startTime) / 1000),
+      comment: comment.trim(),
+      entries,
+    });
+  }
+
+  return (
+    <div style={S.page}>
+      <button style={S.backBtn} onClick={onCancel}>
+        <X size={18} /> Annuler
+      </button>
+      <div style={S.sessionHeadRow}>
+        <div>
+          <div style={S.pageTitle}>{program.name}</div>
+          <div style={{ ...S.caption, marginBottom: 8 }}>
+            {prevSession ? `Dernière fois : ${fmtDate(prevSession.date)}` : "Première séance sur ce programme"}
+          </div>
+        </div>
+        <div style={S.timerBadge}>⏱ {fmtDuration(elapsedSec)}</div>
+      </div>
+
+      {program.exercises.map((ex, exIndex) => {
+        if (ex.type === "cardio") {
+          const c = cardioLogs[ex.id];
+
+          if (c.mode === "planned") {
+            const totalMin = c.segments.reduce((a, s) => a + (Number(s.duration) || 0), 0);
+            return (
+              <div key={ex.id} style={S.exerciseCard}>
+                <div style={S.exerciseCardHead}>
+                  <div style={S.exRowName}>{ex.superset ? "🔗 " : ""}{ex.name}</div>
+                  {ex.superset && <div style={S.caption}>Superset — enchaîné sans repos</div>}
+                  <div style={S.caption}>{ex.muscle}</div>
+                  <div style={S.caption}>Programme : {totalMin} min au total</div>
+                  {ex.note && <div style={S.exNote}>{ex.note}</div>}
+                </div>
+
+                <div style={S.setsHeader}>
+                  <span style={S.setsHeaderCol}>Segment</span>
+                  <span style={S.setsHeaderCol}>Min</span>
+                  <span style={S.setsHeaderCol}>km/h</span>
+                  <span style={S.setsHeaderCol}>Pente %</span>
+                  <span style={{ width: 28 }} />
+                </div>
+                {c.segments.map((seg, si) => (
+                  <div key={seg.id} style={S.setRow}>
+                    <span style={S.setNum}>{si + 1}</span>
+                    <input
+                      style={S.setInput}
+                      inputMode="numeric"
+                      value={seg.duration}
+                      onChange={(e) => updateCardioSegment(ex.id, seg.id, "duration", e.target.value.replace(/[^0-9]/g, ""))}
+                    />
+                    <input
+                      style={S.setInput}
+                      inputMode="decimal"
+                      value={seg.speed}
+                      onChange={(e) => updateCardioSegment(ex.id, seg.id, "speed", e.target.value.replace(/[^0-9.,]/g, ""))}
+                    />
+                    <input
+                      style={S.setInput}
+                      inputMode="decimal"
+                      value={seg.incline}
+                      onChange={(e) => updateCardioSegment(ex.id, seg.id, "incline", e.target.value.replace(/[^0-9.,]/g, ""))}
+                    />
+                    <button style={S.setRemoveBtn} onClick={() => removeCardioSegment(ex.id, seg.id)}>
+                      <Minus size={14} />
+                    </button>
+                  </div>
+                ))}
+                <button style={S.addSetBtn} onClick={() => addCardioSegment(ex.id)}>
+                  <Plus size={14} /> Ajouter un segment
+                </button>
+
+                <GoalBox exId={ex.id} goalDrafts={goalDrafts} setGoalDrafts={setGoalDrafts} onSaveGoal={onSaveGoal} readOnly={coachedBlock} coachName={coachedBlock?.coachName} />
+              </div>
+            );
+          }
+
+          const displaySec = cardioDisplaySeconds(ex.id);
+          return (
+            <div key={ex.id} style={S.exerciseCard}>
+              <div style={S.exerciseCardHead}>
+                <div style={S.exRowName}>{ex.superset ? "🔗 " : ""}{ex.name}</div>
+                {ex.superset && <div style={S.caption}>Superset — enchaîné sans repos</div>}
+                <div style={S.caption}>{ex.muscle}</div>
+                {ex.note && <div style={S.exNote}>{ex.note}</div>}
+              </div>
+
+              <div style={S.cardioTimerRow}>
+                <div style={S.cardioTimerDisplay}>⏱ {fmtDuration(displaySec)}</div>
+                <button
+                  style={c.running ? S.cardioStopBtn : S.cardioStartBtn}
+                  onClick={() => toggleCardioTimer(ex.id)}
+                >
+                  {c.running ? "⏹ Arrêter" : "▶ Démarrer"}
+                </button>
+              </div>
+
+              <div style={S.newExerciseRow}>
+                <label style={S.smallLabel}>
+                  Vitesse (km/h)
+                  <input
+                    style={S.smallInput}
+                    inputMode="decimal"
+                    placeholder={c.prevSpeed ? String(c.prevSpeed) : "-"}
+                    value={c.speed}
+                    onChange={(e) => updateCardio(ex.id, "speed", e.target.value.replace(/[^0-9.,]/g, ""))}
+                  />
+                </label>
+                <label style={S.smallLabel}>
+                  Pente (%)
+                  <input
+                    style={S.smallInput}
+                    inputMode="decimal"
+                    placeholder={c.prevIncline ? String(c.prevIncline) : "-"}
+                    value={c.incline}
+                    onChange={(e) => updateCardio(ex.id, "incline", e.target.value.replace(/[^0-9.,]/g, ""))}
+                  />
+                </label>
+              </div>
+
+              <GoalBox exId={ex.id} goalDrafts={goalDrafts} setGoalDrafts={setGoalDrafts} onSaveGoal={onSaveGoal} readOnly={coachedBlock} coachName={coachedBlock?.coachName} />
+            </div>
+          );
+        }
+
+        const prevSets = prevSession?.entries[ex.id];
+
+        return (
+          <div key={ex.id} style={S.exerciseCard}>
+            <div style={S.exerciseCardHead}>
+              <div style={S.exRowName}>{ex.superset ? "🔗 " : ""}{ex.name}</div>
+              {ex.superset && <div style={S.caption}>Superset — enchaîné sans repos</div>}
+              <div style={S.caption}>{ex.muscle}</div>
+              <div style={S.caption}>Fourchette : {ex.repMin}-{ex.repMax} reps</div>
+              {ex.restSeconds ? <div style={S.caption}>Repos : {fmtRestTime(ex.restSeconds)}</div> : null}
+              {ex.note && <div style={S.exNote}>{ex.note}</div>}
+            </div>
+
+            <div style={S.setsHeader}>
+              <span style={S.setsHeaderCol}>Série</span>
+              <span style={S.setsHeaderCol}>Reps</span>
+              <span style={S.setsHeaderCol}>Poids (kg)</span>
+              <span style={{ width: 28 }} />
+            </div>
+            {draft[ex.id].map((s, idx) => (
+              <div key={idx} style={S.setRow}>
+                <span style={S.setNum}>{idx + 1}</span>
+                <input
+                  style={S.setInput}
+                  inputMode="numeric"
+                  placeholder={prevSets?.[idx] ? String(prevSets[idx].reps) : "-"}
+                  value={s.reps}
+                  onChange={(e) => updateSet(ex.id, idx, "reps", e.target.value.replace(/[^0-9]/g, ""))}
+                />
+                <input
+                  style={S.setInput}
+                  inputMode="decimal"
+                  placeholder={prevSets?.[idx] ? String(prevSets[idx].poids) : "-"}
+                  value={s.poids}
+                  onChange={(e) => updateSet(ex.id, idx, "poids", e.target.value.replace(/[^0-9.,]/g, ""))}
+                />
+                <button style={S.setRemoveBtn} onClick={() => removeSet(ex.id, idx)}>
+                  <Minus size={14} />
+                </button>
+              </div>
+            ))}
+            <button style={S.addSetBtn} onClick={() => addSet(ex.id)}>
+              <Plus size={14} /> Ajouter une série
+            </button>
+
+            {ex.restSeconds && !program.exercises[exIndex + 1]?.superset ? (
+              <div style={S.restRow}>
+                {restTimers[ex.id] ? (
+                  <>
+                    <div style={{ ...S.restBadge, ...(restRemaining(ex.id) === 0 ? S.restBadgeDone : {}) }}>
+                      {restRemaining(ex.id) === 0 ? "✅ Repos terminé" : `⏱ ${fmtDuration(restRemaining(ex.id))}`}
+                    </div>
+                    <button style={S.restCancelBtn} onClick={() => cancelRest(ex.id)}>
+                      {restRemaining(ex.id) === 0 ? "OK" : "Annuler"}
+                    </button>
+                  </>
+                ) : (
+                  <button style={S.restStartBtn} onClick={() => startRest(ex.id, ex.restSeconds)}>
+                    ⏱ Démarrer le repos ({fmtRestTime(ex.restSeconds)})
+                  </button>
+                )}
+              </div>
+            ) : null}
+
+            <GoalBox exId={ex.id} goalDrafts={goalDrafts} setGoalDrafts={setGoalDrafts} onSaveGoal={onSaveGoal} readOnly={coachedBlock} coachName={coachedBlock?.coachName} />
+          </div>
+        );
+      })}
+
+      <div style={S.commentBox}>
+        <div style={S.sectionLabel}>Ressenti de la séance</div>
+        <textarea
+          style={S.commentInput}
+          placeholder="Mental, fatigue, sommeil, motivation... (optionnel)"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          rows={3}
+        />
+      </div>
+
+      <button style={S.finishBtn} onClick={save}>
+        <Check size={18} /> Terminer la séance
+      </button>
+      <div style={{ height: 24 }} />
+    </div>
+  );
+}
+
+/* ---------- Bottom nav ---------- */
+
+/* ---------- Coach : liste des suivis ---------- */
+
+function CoachView({ athletes, onOpenAthlete, onAddAthlete }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState("");
+
+  function handleAdd() {
+    if (!name.trim()) return;
+    onAddAthlete(name.trim());
+    setName("");
+    setShowAdd(false);
+  }
+
+  return (
+    <div style={S.page}>
+      <div style={S.pageTitle}>Coach</div>
+      <div style={{ ...S.caption, marginBottom: 14 }}>
+        Gère le programme, les séances reçues et les objectifs de chacun de tes suivis.
+      </div>
+
+      <div style={S.programList}>
+        {athletes.map((a) => (
+          <button key={a.id} style={S.sessionLogRow} onClick={() => onOpenAthlete(a.id)}>
+            <div>
+              <div style={S.exRowName}>{a.name}</div>
+              <div style={S.caption}>{a.programs.length} séance(s) · {a.sessions.length} reçue(s)</div>
+            </div>
+            <span style={S.caption}>→</span>
+          </button>
+        ))}
+        {athletes.length === 0 && <div style={S.caption}>Aucun suivi pour l'instant.</div>}
+      </div>
+
+      {showAdd ? (
+        <div style={S.newBlockRow}>
+          <input
+            style={S.textInput}
+            placeholder="Nom du suivi (ex : Baptiste)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button style={S.goalSaveBtn} onClick={handleAdd}>
+            <Check size={16} />
+          </button>
+        </div>
+      ) : (
+        <button style={S.createBtn} onClick={() => setShowAdd(true)}>
+          <Plus size={16} /> Ajouter un suivi
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Coach : détail d'un suivi ---------- */
+
+function AthleteDetailView({ athlete, onBack, onUpdateAthlete, onDeleteAthlete }) {
+  const [programForm, setProgramForm] = useState(null);
+  const [viewingSession, setViewingSession] = useState(null);
+  const [viewingExercise, setViewingExercise] = useState(null);
+  const [showImportSession, setShowImportSession] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importStatus, setImportStatus] = useState(null);
+  const [confirmDeleteAthlete, setConfirmDeleteAthlete] = useState(false);
+  const [openProgram, setOpenProgram] = useState(null);
+  const [confirmDeleteProgram, setConfirmDeleteProgram] = useState(null);
+
+  const fakeBlocks = [{ id: "athlete-block", name: athlete.name, active: true }];
+
+  const exerciseIndex = useMemo(() => {
+    const idx = {};
+    athlete.programs.forEach((p) => p.exercises.forEach((e) => (idx[e.id] = { ...e, programName: p.name })));
+    return idx;
+  }, [athlete.programs]);
+
+  function addProgram(program) {
+    const next = [...athlete.programs, { ...program, blockId: "athlete-block" }];
+    onUpdateAthlete(athlete.id, { programs: next });
+    setProgramForm(null);
+  }
+  function updateProgramForAthlete(updated) {
+    const next = athlete.programs.map((p) => (p.id === updated.id ? { ...p, ...updated } : p));
+    onUpdateAthlete(athlete.id, { programs: next });
+    setProgramForm(null);
+  }
+  function deleteProgramForAthlete(id) {
+    const next = athlete.programs.filter((p) => p.id !== id);
+    onUpdateAthlete(athlete.id, { programs: next });
+  }
+
+  function handleExportProgram() {
+    const data = { block: { name: `Programme — ${athlete.name}` }, programs: athlete.programs, coachName: "" };
+    const text = programSummaryText(data.block.name, athlete.programs) + "\n" + packPayload("PROGRAM", data);
+    window.open(buildWhatsAppLink("", text), "_blank");
+  }
+
+  function handleImportSession() {
+    const parsed = unpackPayload(importText);
+    if (!parsed || parsed.type !== "SESSION" || !parsed.data.session) {
+      setImportStatus("error");
+      setTimeout(() => setImportStatus(null), 2500);
+      return;
+    }
+    const next = [...athlete.sessions, parsed.data.session];
+    onUpdateAthlete(athlete.id, { sessions: next });
+    setImportStatus("ok");
+    setImportText("");
+    setShowImportSession(false);
+    setTimeout(() => setImportStatus(null), 2500);
+  }
+
+  function saveGoal(exId, text) {
+    const next = { ...athlete.goals };
+    if (text) next[exId] = text;
+    else delete next[exId];
+    onUpdateAthlete(athlete.id, { goals: next });
+  }
+
+  function handleExportGoals() {
+    const text = goalsSummaryText(athlete.name, athlete.goals, exerciseIndex) + "\n" + packPayload("GOALS", { goals: athlete.goals });
+    window.open(buildWhatsAppLink("", text), "_blank");
+  }
+
+  if (programForm) {
+    return (
+      <ProgramForm
+        mode={programForm.mode}
+        initialProgram={programForm.program}
+        defaultBlockId="athlete-block"
+        blocks={fakeBlocks}
+        onCancel={() => setProgramForm(null)}
+        onCreate={addProgram}
+        onUpdate={updateProgramForAthlete}
+      />
+    );
+  }
+
+  if (viewingExercise) {
+    return (
+      <ExerciseHistory
+        exercise={viewingExercise}
+        sessions={athlete.sessions}
+        onBack={() => setViewingExercise(null)}
+        coachGoalValue={athlete.goals[viewingExercise.id]}
+        onSaveCoachGoal={(text) => saveGoal(viewingExercise.id, text)}
+      />
+    );
+  }
+
+  if (viewingSession) {
+    return (
+      <SessionDetailView
+        session={viewingSession}
+        exerciseIndex={exerciseIndex}
+        onBack={() => setViewingSession(null)}
+        onOpenExercise={(ex) => setViewingExercise(ex)}
+        coachPhone=""
+        onSaveCoachPhone={() => {}}
+      />
+    );
+  }
+
+  return (
+    <div style={S.page}>
+      <button style={S.backBtn} onClick={onBack}>
+        <ChevronLeft size={18} /> Coach
+      </button>
+      <div style={S.pageTitle}>{athlete.name}</div>
+      <div style={{ ...S.caption, marginBottom: 14 }}>
+        {athlete.programs.length} séance(s) au programme · {athlete.sessions.length} reçue(s)
+      </div>
+
+      <div style={S.sectionLabel}>Programme</div>
+      {athlete.programs.map((p) => (
+        <div key={p.id} style={S.programBlock}>
+          <button style={S.programBlockHeader} onClick={() => setOpenProgram(openProgram === p.id ? null : p.id)}>
+            <span style={S.programBlockTitle}>{p.name}</span>
+            <span style={S.caption}>{openProgram === p.id ? "−" : "+"}</span>
+          </button>
+          {openProgram === p.id && (
+            <div style={S.programBlockBody}>
+              {p.exercises.map((ex) => (
+                <button key={ex.id} style={S.exRowClickable} onClick={() => setViewingExercise(ex)}>
+                  <div>
+                    <div style={S.exRowName}>{ex.name}</div>
+                    <div style={S.caption}>{ex.muscle}</div>
+                    {ex.type !== "cardio" && (
+                      <div style={S.caption}>{ex.sets}×{ex.repMin}-{ex.repMax} reps</div>
+                    )}
+                    {athlete.goals[ex.id] && (
+                      <div style={{ ...S.caption, color: "#FFC233", marginTop: 2 }}>🎯 {athlete.goals[ex.id]}</div>
+                    )}
+                  </div>
+                  <span style={S.caption}>Voir →</span>
+                </button>
+              ))}
+              <button style={S.editProgramBtn} onClick={() => setProgramForm({ mode: "edit", program: p })}>
+                Modifier cette séance
+              </button>
+              {confirmDeleteProgram === p.id ? (
+                <div style={S.confirmDeleteRow}>
+                  <span style={S.caption}>Supprimer « {p.name} » ?</span>
+                  <button style={S.confirmDeleteBtn} onClick={() => { deleteProgramForAthlete(p.id); setConfirmDeleteProgram(null); }}>
+                    Oui, supprimer
+                  </button>
+                  <button style={S.cancelDeleteBtn} onClick={() => setConfirmDeleteProgram(null)}>
+                    Annuler
+                  </button>
+                </div>
+              ) : (
+                <button style={S.deleteProgramBtn} onClick={() => setConfirmDeleteProgram(p.id)}>
+                  <Trash2 size={13} /> Supprimer
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+      <button style={S.createBtn} onClick={() => setProgramForm({ mode: "create", program: null })}>
+        <Plus size={16} /> Ajouter une séance au programme
+      </button>
+
+      {athlete.programs.length > 0 && (
+        <button style={{ ...S.exportBtn, marginTop: 10 }} onClick={handleExportProgram}>
+          📱 Envoyer le programme par WhatsApp
+        </button>
+      )}
+
+      <div style={S.sectionLabel}>Séances reçues</div>
+      <div style={S.programList}>
+        {[...athlete.sessions].sort((a, b) => (a.date < b.date ? 1 : -1)).map((s) => (
+          <button key={s.id} style={S.sessionLogRow} onClick={() => setViewingSession(s)}>
+            <div>
+              <div style={S.exRowName}>{s.programName || "Séance"}</div>
+              <div style={S.caption}>{Object.keys(s.entries).length} exercices</div>
+            </div>
+            <span style={S.caption}>{fmtDate(s.date)}</span>
+          </button>
+        ))}
+        {athlete.sessions.length === 0 && <div style={S.caption}>Aucune séance reçue pour l'instant.</div>}
+      </div>
+
+      {showImportSession ? (
+        <div style={S.segmentsBox}>
+          <div style={S.goalInputLabel}>Colle ici la séance reçue de {athlete.name} sur WhatsApp :</div>
+          <textarea
+            style={{ ...S.commentInput, marginBottom: 8 }}
+            rows={4}
+            placeholder="Colle le message reçu ici..."
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+          />
+          <button style={S.createBtn} onClick={handleImportSession}>
+            Importer
+          </button>
+          {importStatus === "ok" && <div style={S.exportStatus}>Séance importée ✓</div>}
+          {importStatus === "error" && <div style={S.exportStatusError}>Texte non reconnu — vérifie le message collé.</div>}
+        </div>
+      ) : (
+        <button style={S.exportBtnGhost} onClick={() => setShowImportSession(true)}>
+          📥 Importer une séance reçue
+        </button>
+      )}
+
+      <div style={S.sectionLabel}>Objectifs</div>
+      <div style={{ ...S.caption, marginBottom: 10 }}>
+        Ouvre un exercice ci-dessus (dans "Programme") pour voir sa performance et y fixer l'objectif de la semaine prochaine.
+      </div>
+
+      {Object.keys(athlete.goals || {}).length > 0 && (
+        <button style={{ ...S.exportBtn, marginTop: 4 }} onClick={handleExportGoals}>
+          📱 Envoyer les objectifs par WhatsApp
+        </button>
+      )}
+
+      <div style={{ marginTop: 24 }}>
+        {confirmDeleteAthlete ? (
+          <div style={S.confirmDeleteRow}>
+            <span style={S.caption}>Supprimer le suivi « {athlete.name} » et toutes ses données ?</span>
+            <button style={S.confirmDeleteBtn} onClick={() => onDeleteAthlete(athlete.id)}>
+              Oui, supprimer
+            </button>
+            <button style={S.cancelDeleteBtn} onClick={() => setConfirmDeleteAthlete(false)}>
+              Annuler
+            </button>
+          </div>
+        ) : (
+          <button style={S.deleteProgramBtn} onClick={() => setConfirmDeleteAthlete(true)}>
+            <Trash2 size={13} /> Supprimer ce suivi
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BottomNav({ tab, setTab }) {
+  const items = [
+    { id: "home", label: "Accueil", icon: Home },
+    { id: "programs", label: "Programmes", icon: ListChecks },
+    { id: "history", label: "Historique", icon: TrendingUp },
+    { id: "coach", label: "Coach", icon: Users },
+  ];
+  return (
+    <div style={S.nav}>
+      {items.map(({ id, label, icon: Icon }) => (
+        <button key={id} style={S.navBtn} onClick={() => setTab(id)}>
+          <Icon size={20} strokeWidth={tab === id ? 2.4 : 1.8} color={tab === id ? "#FFC233" : "#FFFFFF"} />
+          <span style={{ ...S.navLabel, color: tab === id ? "#FFC233" : "#FFFFFF" }}>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- Fonts ---------- */
+
+function FontStyles() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      input:focus { outline: 2px solid #FFC233; }
+      button { font-family: inherit; cursor: pointer; }
+    `}</style>
+  );
+}
+
+/* ---------- Styles ---------- */
+
+const S = {
+  appShell: {
+    fontFamily: "'Inter', sans-serif",
+    background: "#121212",
+    color: "#FFFFFF",
+    height: "100vh",
+    display: "flex",
+    flexDirection: "column",
+    maxWidth: 480,
+    margin: "0 auto",
+    position: "relative",
+  },
+  screen: { flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch" },
+  topBar: {
+    textAlign: "center", fontFamily: "'Oswald', sans-serif", fontSize: 26, letterSpacing: 1.5,
+    color: "#FF4433", padding: "10px 0 10px", borderBottom: "1px solid #332E28", flexShrink: 0,
+  },
+  page: { padding: "20px 16px 12px" },
+  sessionHeadRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 },
+  timerBadge: {
+    fontFamily: "'JetBrains Mono', monospace", fontSize: 15, background: "#1B1A18",
+    border: "1px solid #FFC233", borderRadius: 10, padding: "6px 10px", color: "#FFFFFF", flexShrink: 0,
+    boxShadow: "0 0 8px rgba(255,68,51,0.5), 0 0 16px rgba(255,68,51,0.25)",
+  },
+  commentBox: { marginTop: 6, marginBottom: 14 },
+  commentInput: {
+    width: "100%", background: "#1B1A18", border: "1px solid #3D362E", borderRadius: 10,
+    padding: "11px 12px", color: "#FFFFFF", fontSize: 13.5, fontFamily: "'Inter', sans-serif", resize: "vertical",
+  },
+  commentDisplay: {
+    background: "#1B1A18", border: "1px solid #332E28", borderRadius: 10, padding: "10px 12px",
+    fontSize: 13, color: "#FFFFFF", marginBottom: 14, lineHeight: 1.4,
+  },
+  exportBox: { marginTop: 20, borderTop: "1px solid #2C2620", paddingTop: 16 },
+  exportLabel: { fontSize: 11.5, fontWeight: 700, letterSpacing: 0.5, color: "#FFFFFF", textTransform: "uppercase", marginBottom: 8 },
+  exportRow: { display: "flex", gap: 8, flexWrap: "wrap" },
+  exportBtn: { flex: 1, background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FFC233", borderRadius: 10, padding: "11px 0", fontWeight: 700, fontSize: 12.5, minWidth: 140, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  exportBtnGhost: { flex: 1, background: "none", border: "1px solid #3D362E", color: "#FFFFFF", borderRadius: 10, padding: "11px 0", fontWeight: 600, fontSize: 12.5, minWidth: 140 },
+  exportStatus: { fontSize: 12, color: "#FFC233", marginTop: 8 },
+  exportStatusError: { fontSize: 12, color: "#FF4433", marginTop: 8 },
+  loadingWrap: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh" },
+  loadingBar: { width: 120, height: 3, background: "#3D362E", borderRadius: 2, overflow: "hidden" },
+  brand: { marginBottom: 20 },
+  brandMark: { fontFamily: "'Oswald', sans-serif", fontSize: 34, letterSpacing: 1, color: "#FFC233", lineHeight: 1, textShadow: "0 0 22px rgba(255,68,51,0.45)" },
+  caption: { fontSize: 12.5, color: "#FFFFFF" },
+  statRow: { display: "flex", gap: 10, marginBottom: 22 },
+  statCard: { flex: 1, background: "#1D1B19", borderRadius: 14, padding: "14px 14px", border: "1px solid #332E28" },
+  statValue: { fontFamily: "'JetBrains Mono', monospace", fontSize: 24, fontWeight: 500 },
+  statLabel: { fontSize: 11.5, color: "#FFFFFF", marginTop: 2 },
+  sectionLabel: { fontSize: 11.5, fontWeight: 700, letterSpacing: 1, color: "#FFFFFF", textTransform: "uppercase", margin: "18px 0 8px" },
+  heroCard: {
+    width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+    background: "linear-gradient(135deg,#1D1B19,#1F1D1A)", border: "1px solid #FFC233",
+    borderRadius: 16, padding: "18px 18px", textAlign: "left", color: "#FFFFFF",
+    boxShadow: "0 0 10px rgba(255,68,51,0.5), 0 0 22px rgba(255,68,51,0.28)",
+  },
+  heroTitle: { fontFamily: "'Oswald', sans-serif", fontSize: 20, letterSpacing: 0.3 },
+  heroGo: { width: 44, height: 44, borderRadius: "50%", background: "#1B1A18", color: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", border: "1.5px solid #FFC233", boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  programList: { display: "flex", flexDirection: "column", gap: 8 },
+  programRow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12,
+    padding: "13px 14px", color: "#FFFFFF", textAlign: "left",
+  },
+  programRowGlow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#1B1A18", border: "1px solid #FFC233", borderRadius: 12,
+    padding: "13px 14px", color: "#FFFFFF", textAlign: "left",
+    boxShadow: "0 0 8px rgba(255,68,51,0.5), 0 0 16px rgba(255,68,51,0.25)",
+  },
+  programRowName: { fontSize: 14.5, fontWeight: 500 },
+  lastSessionCard: { background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12, padding: "13px 14px" },
+  lastSessionTop: { display: "flex", justifyContent: "space-between" },
+  bodyweightCard: {
+    width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12,
+    padding: "13px 14px", color: "#FFFFFF", textAlign: "left", marginBottom: 4,
+  },
+  muscleBalanceCard: { background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12, padding: "14px" },
+  muscleRow: { marginBottom: 10 },
+  muscleRowLabel: { display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 },
+  muscleBarTrack: { background: "#332E28", borderRadius: 6, height: 6, overflow: "hidden" },
+  muscleBarFill: { background: "#FFC233", height: "100%", borderRadius: 6 },
+  pageTitle: { fontFamily: "'Oswald', sans-serif", fontSize: 24, marginBottom: 4, fontWeight: 700 },
+  programsHeadRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  emptyStateCard: { background: "#1B1A18", border: "1px dashed #3D362E", borderRadius: 14, padding: "16px", marginBottom: 10 },
+  blockChipsRow: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 },
+  blockChip: {
+    display: "flex", alignItems: "center", gap: 6, background: "#1B1A18", border: "1px solid #332E28",
+    borderRadius: 20, padding: "8px 14px", fontSize: 13, color: "#FFFFFF", fontWeight: 500,
+  },
+  blockChipSelected: { border: "1px solid #FFC233", color: "#FFFFFF", background: "#1B1A18", boxShadow: "0 0 8px rgba(255,68,51,0.5), 0 0 16px rgba(255,68,51,0.25)" },
+  blockChipAdd: {
+    background: "#1B1A18", border: "1px dashed #423A31", borderRadius: 20, padding: "8px 12px",
+    color: "#FFFFFF", display: "flex", alignItems: "center",
+  },
+  activeDot: { width: 6, height: 6, borderRadius: "50%", background: "#FF4433", flexShrink: 0 },
+  newBlockRow: { display: "flex", gap: 8, marginBottom: 10, alignItems: "center" },
+  notActiveBanner: {
+    display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap",
+    background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12, padding: "12px 14px",
+    fontSize: 12.5, color: "#FFFFFF", marginBottom: 8,
+  },
+  activateBtn: { background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FFC233", borderRadius: 8, padding: "8px 12px", fontSize: 12.5, fontWeight: 700, flexShrink: 0, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  editProgramBtn: {
+    width: "100%", marginTop: 8, background: "none", border: "1px solid #3D362E", color: "#FFFFFF",
+    borderRadius: 10, padding: "11px 0", fontWeight: 600, fontSize: 13.5,
+  },
+  createBtn: {
+    display: "flex", alignItems: "center", justifyContent: "center", gap: 4, background: "#1B1A18", color: "#FFFFFF",
+    border: "1.5px solid #FFC233", borderRadius: 10, padding: "12px 0", fontSize: 13.5, fontWeight: 700, width: "100%", marginTop: 4,
+    boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)",
+  },
+  deleteProgramBtn: {
+    display: "flex", alignItems: "center", gap: 6, background: "none", border: "none",
+    color: "#FF4433", fontSize: 12, padding: "10px 2px 2px", marginTop: 2,
+  },
+  confirmDeleteRow: { display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" },
+  confirmDeleteBtn: { background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FF4433", borderRadius: 8, padding: "7px 10px", fontSize: 12, fontWeight: 700, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  cancelDeleteBtn: { background: "none", border: "1px solid #3D362E", color: "#FFFFFF", borderRadius: 8, padding: "7px 10px", fontSize: 12 },
+  textInput: {
+    width: "100%", background: "#1B1A18", border: "1px solid #3D362E", borderRadius: 10,
+    padding: "11px 12px", color: "#FFFFFF", fontSize: 14, marginBottom: 8, fontFamily: "'Inter', sans-serif",
+  },
+  selectInput: {
+    width: "100%", background: "#1B1A18", border: "1px solid #3D362E", borderRadius: 10,
+    padding: "11px 12px", color: "#FFFFFF", fontSize: 14, marginBottom: 8, fontFamily: "'Inter', sans-serif",
+  },
+  newExerciseCard: { background: "#191715", border: "1px solid #332E28", borderRadius: 12, padding: "12px 12px", marginBottom: 10 },
+  segmentsBox: { background: "#121212", border: "1px dashed #423A31", borderRadius: 10, padding: "10px", marginBottom: 8 },
+  newExerciseHead: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 },
+  reorderBtn: {
+    width: 26, height: 26, background: "#121212", border: "1px solid #332E28", borderRadius: 6,
+    color: "#FFFFFF", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  supersetCheckRow: {
+    display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#FFFFFF",
+    background: "#121212", border: "1px dashed #FFC233", borderRadius: 8, padding: "8px 10px", marginBottom: 8, lineHeight: 1.3,
+  },
+  newExerciseRow: { display: "flex", gap: 8, marginBottom: 8 },
+  stackedFieldCol: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 },
+  stackedLabel: { fontSize: 10.5, color: "#FFFFFF", textTransform: "uppercase", letterSpacing: 0.5, display: "flex", flexDirection: "column", gap: 4 },
+  stackedInput: {
+    background: "#121212", border: "1px solid #332E28", borderRadius: 8, padding: "10px 10px",
+    color: "#FFFFFF", fontSize: 15, fontFamily: "'JetBrains Mono', monospace", textAlign: "left",
+  },
+  smallLabel: { flex: 1, fontSize: 10.5, color: "#FFFFFF", textTransform: "uppercase", letterSpacing: 0.5, display: "flex", flexDirection: "column", gap: 4 },
+  smallInput: {
+    background: "#1B1A18", border: "1px solid #3D362E", borderRadius: 8, padding: "8px 8px",
+    color: "#FFFFFF", fontSize: 14, fontFamily: "'JetBrains Mono', monospace", textAlign: "center",
+  },
+  modeToggle: { display: "flex", gap: 8, marginBottom: 16 },
+  modePill: { flex: 1, background: "#1B1A18", border: "1px solid #332E28", borderRadius: 10, padding: "9px 0", fontSize: 12.5, color: "#FFFFFF", fontWeight: 600 },
+  modePillActive: { background: "#1B1A18", border: "1px solid #FFC233", color: "#FFFFFF", boxShadow: "0 0 8px rgba(255,68,51,0.5), 0 0 16px rgba(255,68,51,0.25)" },
+  sessionLogRow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12,
+    padding: "13px 14px", color: "#FFFFFF", textAlign: "left",
+  },
+  programBlock: { border: "1px solid #332E28", borderRadius: 14, marginBottom: 10, overflow: "hidden" },
+  programBlockHeader: { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#1B1A18", padding: "14px 16px", color: "#FFFFFF" },
+  programBlockTitle: { fontFamily: "'Oswald', sans-serif", fontSize: 16.5, letterSpacing: 0.3 },
+  programBlockBody: { padding: "4px 16px 16px", background: "#191715" },
+  exRow: { padding: "10px 0", borderBottom: "1px solid #2C2620" },
+  exRowClickable: {
+    width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "10px 0", borderBottom: "1px solid #2C2620", background: "none", border: "none",
+    borderBottomWidth: 1, borderBottomStyle: "solid", borderBottomColor: "#2C2620",
+    color: "#FFFFFF", textAlign: "left",
+  },
+  exRowName: { fontSize: 14.5, fontWeight: 600 },
+  exNote: { fontSize: 11.5, color: "#FFC233", marginTop: 4 },
+  startProgramBtn: { width: "100%", marginTop: 12, background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FFC233", borderRadius: 10, padding: "12px 0", fontWeight: 700, fontSize: 14, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  backBtn: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: "#FFFFFF", fontSize: 13.5, padding: "4px 0 14px" },
+  chartCard: { background: "#1B1A18", border: "1px solid #332E28", borderRadius: 14, padding: "12px 6px 4px" },
+  historyRow: { background: "#1B1A18", border: "1px solid #332E28", borderRadius: 12, padding: "10px 14px" },
+  historySets: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 },
+  setChip: { fontFamily: "'JetBrains Mono', monospace", fontSize: 11.5, background: "#332E28", padding: "3px 8px", borderRadius: 6, color: "#FFFFFF" },
+  exerciseCard: { background: "#1B1A18", border: "1px solid #332E28", borderRadius: 14, padding: "14px 14px", marginBottom: 12 },
+  typeToggleRow: { display: "flex", gap: 6, marginBottom: 8 },
+  typePill: { flex: 1, background: "#121212", border: "1px solid #3D362E", borderRadius: 8, padding: "7px 0", fontSize: 12.5, color: "#FFFFFF", fontWeight: 600 },
+  typePillActive: { background: "#1B1A18", border: "1px solid #FFC233", color: "#FFFFFF", boxShadow: "0 0 8px rgba(255,68,51,0.5), 0 0 16px rgba(255,68,51,0.25)" },
+  cardioTimerRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 },
+  cardioTimerDisplay: { fontFamily: "'JetBrains Mono', monospace", fontSize: 20, color: "#FFC233" },
+  cardioStartBtn: { background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FFC233", borderRadius: 10, padding: "10px 16px", fontWeight: 700, fontSize: 13, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  cardioStopBtn: { background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FF4433", borderRadius: 10, padding: "10px 16px", fontWeight: 700, fontSize: 13, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  restRow: { display: "flex", alignItems: "center", gap: 8, marginTop: 10 },
+  restStartBtn: {
+    flex: 1, background: "#191715", border: "1px solid #423A31", color: "#FFFFFF",
+    borderRadius: 10, padding: "10px 0", fontWeight: 600, fontSize: 12.5,
+  },
+  restBadge: {
+    flex: 1, textAlign: "center", fontFamily: "'JetBrains Mono', monospace", fontSize: 14,
+    background: "#1B1A18", border: "1px solid #FFC233", color: "#FFFFFF", borderRadius: 10, padding: "8px 0",
+    boxShadow: "0 0 8px rgba(255,68,51,0.5), 0 0 16px rgba(255,68,51,0.25)",
+  },
+  restBadgeDone: { background: "#1B1A18", border: "1px solid #FF4433", color: "#FFFFFF", boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  restCancelBtn: { background: "none", border: "1px solid #3D362E", color: "#FFFFFF", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, flexShrink: 0 },
+  exerciseCardHead: { marginBottom: 10 },
+  goalBanner: {
+    display: "flex", gap: 6, alignItems: "center", background: "#1B1A18",
+    border: "1px solid #FFC233", borderRadius: 10, padding: "8px 10px",
+    fontSize: 12.5, color: "#FFFFFF", marginBottom: 10, lineHeight: 1.35, flexWrap: "wrap",
+    boxShadow: "0 0 8px rgba(255,68,51,0.45), 0 0 16px rgba(255,68,51,0.22)",
+  },
+  goalIcon: { fontSize: 13, lineHeight: 1.35 },
+  goalLabel: { fontWeight: 700, color: "#FFC233" },
+  goalEditBtn: { marginLeft: "auto", background: "none", border: "none", color: "#FFFFFF", fontSize: 11.5, textDecoration: "underline", padding: 0 },
+  goalInputBox: {
+    background: "#1B1A18", border: "1px solid #FFC233",
+    borderRadius: 10, padding: "10px 10px", marginTop: 10,
+    boxShadow: "0 0 8px rgba(255,68,51,0.4), 0 0 16px rgba(255,68,51,0.2)",
+  },
+  goalInputLabel: { fontSize: 12, color: "#FFFFFF", marginBottom: 6, lineHeight: 1.35 },
+  goalInputRow: { display: "flex", gap: 8 },
+  goalInput: {
+    flex: 1, background: "#121212", border: "1px solid #3D362E", borderRadius: 8,
+    padding: "9px 10px", color: "#FFFFFF", fontSize: 13.5, fontFamily: "'Inter', sans-serif",
+  },
+  goalSaveBtn: {
+    width: 38, background: "#1B1A18", border: "1.5px solid #FFC233", borderRadius: 8, color: "#FFFFFF",
+    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+    boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)",
+  },
+  setsHeader: { display: "flex", alignItems: "center", gap: 8, padding: "0 0 6px" },
+  setsHeaderCol: { flex: 1, fontSize: 10.5, color: "#FFFFFF", textTransform: "uppercase", letterSpacing: 0.5 },
+  setRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 },
+  setNum: { width: 18, fontSize: 12.5, color: "#FFFFFF", fontFamily: "'JetBrains Mono', monospace" },
+  setInput: {
+    flex: 1, background: "#121212", border: "1px solid #3D362E", borderRadius: 8,
+    padding: "9px 10px", color: "#FFFFFF", fontSize: 15, fontFamily: "'JetBrains Mono', monospace", width: 0,
+  },
+  setRemoveBtn: { width: 28, height: 28, flexShrink: 0, background: "none", border: "1px solid #3D362E", borderRadius: 8, color: "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center" },
+  addSetBtn: { display: "flex", alignItems: "center", gap: 6, background: "none", border: "1px dashed #423A31", color: "#FFFFFF", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginTop: 2 },
+  finishBtn: { width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "#1B1A18", color: "#FFFFFF", border: "1.5px solid #FFC233", borderRadius: 12, padding: "15px 0", fontWeight: 700, fontSize: 15, marginTop: 8, boxShadow: "0 0 8px rgba(255,68,51,0.55), 0 0 18px rgba(255,68,51,0.3)" },
+  nav: { display: "flex", borderTop: "1px solid #FF4433", background: "#191715", paddingBottom: "env(safe-area-inset-bottom, 8px)" },
+  navBtn: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, background: "none", border: "none", padding: "10px 0 6px" },
+  navLabel: { fontSize: 10.5, fontWeight: 600 },
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
