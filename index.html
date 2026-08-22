@@ -4037,6 +4037,7 @@ function App() {
             onUpdateMachineSettings={(exId, value) => updateExerciseMachineSettings(activeProgram.id, exId, value)}
             coachComments={coachComments}
             gyms={gyms}
+            machineLibrary={machineLibrary}
             vibrationEnabled={vibrationEnabled}
             onShareWorkout={shareWorkoutWith}
             acceptedFriendIds={acceptedFriendIds}
@@ -7306,10 +7307,68 @@ function ExerciseNoteBox({ value, onSave }) {
   );
 }
 
-function MachineSettingsBox({ initialValue, onSave }) {
+function MachineSettingsBox({ initialValue, onSave, settings = [] }) {
   const [value, setValue] = useState(initialValue || "");
   const [editing, setEditing] = useState(!(initialValue || "").trim());
   const [saved, setSaved] = useState(false);
+
+  // Les crans de la machine sont connus : on propose un menu par réglage plutôt
+  // qu'un champ libre. La valeur reste enregistrée en texte (« Siège : 4 · Dossier : B »)
+  // pour ne rien casser des exercices déjà renseignés.
+  const named = (settings || []).filter((s) => s.name && (s.steps || []).length);
+  const [picks, setPicks] = useState(() => {
+    const out = {};
+    named.forEach((s) => {
+      const m = new RegExp(`${s.name}\\s*:\\s*([^·]+)`, "i").exec(initialValue || "");
+      out[s.name] = m ? m[1].trim() : "";
+    });
+    return out;
+  });
+
+  if (named.length > 0) {
+    const summary = named
+      .filter((s) => picks[s.name])
+      .map((s) => `${s.name} : ${picks[s.name]}`)
+      .join(" · ");
+    if (!editing) {
+      return (
+        <div style={{ ...S.caption, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span>Réglages : <span style={{ color: "#FFC233" }}>{summary || value || "non renseignés"}</span></span>
+          <button style={S.blockChipAdd} onClick={() => setEditing(true)}><Pencil size={12} /></button>
+        </div>
+      );
+    }
+    return (
+      <div style={{ ...S.segmentsBox, marginBottom: 8 }}>
+        {named.map((s) => (
+          <div key={s.name} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <span style={{ ...S.caption, flex: 1, minWidth: 0 }}>{s.name}</span>
+            <select
+              style={{ ...S.setInput, flex: "0 0 110px", textAlignLast: "center" }}
+              value={picks[s.name] || ""}
+              onChange={(e) => setPicks((p) => ({ ...p, [s.name]: e.target.value }))}
+            >
+              <option value="">-</option>
+              {(s.steps || []).map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+        ))}
+        <button
+          style={{ ...S.createBtn, marginTop: 4 }}
+          onClick={() => {
+            const text = named.filter((s) => picks[s.name]).map((s) => `${s.name} : ${picks[s.name]}`).join(" · ");
+            setValue(text);
+            onSave(text);
+            setEditing(false);
+            setSaved(true);
+            setTimeout(() => setSaved(false), 1500);
+          }}
+        >
+          <Check size={15} /> Enregistrer les réglages
+        </button>
+      </div>
+    );
+  }
 
   if (!editing) {
     return (
@@ -7346,7 +7405,73 @@ function MachineSettingsBox({ initialValue, onSave }) {
   );
 }
 
-function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, onFinish, onUpdateMachineSettings, coachComments, gyms, vibrationEnabled, onShareWorkout, acceptedFriendIds = [], friendProfiles, sharedWorkout, onMinimize }) {
+// Retrouve la fiche catalogue d'un exercice à partir du nom de machine qui y est
+// enregistré. C'est elle qui porte les paliers de poids, d'effort et de réglage.
+function machineOf(ex, machineLibrary) {
+  const name = (ex?.machine || "").trim().toLowerCase();
+  if (!name) return null;
+  return (machineLibrary || []).find(
+    (m) => (m.nameFr || "").trim().toLowerCase() === name || (m.nameEn || "").trim().toLowerCase() === name
+  ) || null;
+}
+
+// Champ de saisie qui devient un menu déroulant quand la machine impose des
+// paliers : sur une colonne à 4,5 / 9 / 14 / 18 kg, taper « 15 » n'a aucun sens.
+// « Autre… » reste possible pour les cas particuliers (surcharge, disque ajouté).
+function StepField({ steps, value, placeholder, onChange, style }) {
+  const list = (steps || []).map((s) => String(s).trim()).filter(Boolean);
+  const [free, setFree] = useState(false);
+  if (list.length === 0 || free) {
+    return (
+      <input
+        style={style}
+        inputMode="decimal"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/[^0-9.,]/g, ""))}
+      />
+    );
+  }
+  const known = value === "" || list.includes(String(value));
+  return (
+    <select
+      style={{ ...style, textAlignLast: "center" }}
+      value={known ? value : "__other__"}
+      onChange={(e) => {
+        if (e.target.value === "__other__") { setFree(true); return; }
+        onChange(e.target.value);
+      }}
+    >
+      <option value="">{placeholder || "-"}</option>
+      {list.map((s) => <option key={s} value={s}>{s}</option>)}
+      {!known && <option value={String(value)}>{value}</option>}
+      <option value="__other__">Autre…</option>
+    </select>
+  );
+}
+
+// Jauge de progression vers la charge maximale de la machine, propre à CET
+// exercice : sur une même machine, un tirage prise large et un tirage prise serrée
+// ne se chargent pas pareil, la jauge doit donc suivre l'exercice.
+function StackGauge({ best, max }) {
+  const m = parseFloat(String(max).replace(",", "."));
+  const b = parseFloat(String(best).replace(",", "."));
+  if (!m || isNaN(m) || isNaN(b) || b <= 0) return null;
+  const ratio = Math.max(0, Math.min(1, b / m));
+  const full = ratio >= 1;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={S.gaugeTrack}>
+        <div style={{ ...S.gaugeFill, width: `${ratio * 100}%`, background: full ? "#4CD964" : "#FFC233" }} />
+      </div>
+      <div style={{ ...S.metaLine, marginTop: 3 }}>
+        {full ? "Charge maximale de la machine atteinte" : `${b} / ${m} kg — record sur cet exercice`}
+      </div>
+    </div>
+  );
+}
+
+function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, onFinish, onUpdateMachineSettings, coachComments, gyms, vibrationEnabled, onShareWorkout, acceptedFriendIds = [], friendProfiles, sharedWorkout, onMinimize, machineLibrary = [] }) {
   const [confirmAbort, setConfirmAbort] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [sharePick, setSharePick] = useState([]);
@@ -7594,6 +7719,25 @@ function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, on
     if (!c) return 0;
     return c.running ? c.elapsedSeconds + Math.round((Date.now() - c.startedAt) / 1000) : c.elapsedSeconds;
   }
+  // Record de charge sur cet exercice précis. On croise l'historique et la séance
+  // en cours : la jauge doit avancer dès la série saisie, pas seulement après coup.
+  function bestWeightFor(ex) {
+    let best = 0;
+    (sessions || []).forEach((s) => {
+      const entry = s.entries?.[ex.id];
+      if (!Array.isArray(entry)) return;
+      entry.forEach((x) => {
+        const p = parseFloat(String(x?.poids ?? "").replace(",", "."));
+        if (!isNaN(p) && p > best) best = p;
+      });
+    });
+    (draft[ex.id] || []).forEach((x) => {
+      const p = parseFloat(String(x?.poids ?? "").replace(",", "."));
+      if (!isNaN(p) && p > best) best = p;
+    });
+    return best;
+  }
+
   function updateCardioSegment(exId, segId, field, value) {
     setCardioLogs((c) => ({
       ...c,
@@ -7912,27 +8056,29 @@ function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, on
                           value={seg.duration}
                           onChange={(e) => updateCardioSegment(ex.id, seg.id, "duration", e.target.value.replace(/[^0-9]/g, ""))}
                         />
-                        <input
+                        {/* Paliers de la machine cardio, s'ils sont connus : une
+                            résistance qui va de 1 à 20 se choisit, elle ne se tape pas. */}
+                        <StepField
                           style={S.setInput}
-                          inputMode="decimal"
+                          steps={(machineOf(ex, machineLibrary)?.efforts || []).find((x) => x.unit === "kmh")?.steps}
                           placeholder={
                             goalDrafts[ex.id]?.speed?.[si]
                               ? String(goalDrafts[ex.id].speed[si])
                               : plannedSeg?.speed != null ? String(plannedSeg.speed) : "-"
                           }
                           value={seg.speed}
-                          onChange={(e) => updateCardioSegment(ex.id, seg.id, "speed", e.target.value.replace(/[^0-9.,]/g, ""))}
+                          onChange={(v) => updateCardioSegment(ex.id, seg.id, "speed", v)}
                         />
-                        <input
+                        <StepField
                           style={S.setInput}
-                          inputMode="decimal"
+                          steps={(machineOf(ex, machineLibrary)?.efforts || []).find((x) => x.unit === "incline" || x.unit === "resistance" || x.unit === "niveau")?.steps}
                           placeholder={
                             goalDrafts[ex.id]?.incline?.[si]
                               ? String(goalDrafts[ex.id].incline[si])
                               : plannedSeg?.incline != null ? String(plannedSeg.incline) : "-"
                           }
                           value={seg.incline}
-                          onChange={(e) => updateCardioSegment(ex.id, seg.id, "incline", e.target.value.replace(/[^0-9.,]/g, ""))}
+                          onChange={(v) => updateCardioSegment(ex.id, seg.id, "incline", v)}
                         />
                         <button style={S.setRemoveBtn} onClick={() => removeCardioSegment(ex.id, seg.id)}>
                           <Minus size={14} />
@@ -8152,10 +8298,24 @@ function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, on
                   {chainInfo(exIndex) && <div style={{ ...S.caption, color: "#FFC233" }}>Enchaînement {chainInfo(exIndex).position}/{chainInfo(exIndex).total}</div>}
                   <div style={S.caption}>{ex.muscle}</div>
                   <div style={S.caption}>Fourchette : {ex.repMin}-{ex.repMax} reps</div>
+                  {/* Réglages de la machine : menus déroulants quand les crans sont
+                      connus, champ libre sinon. La valeur reste stockée en texte,
+                      donc rien ne se perd pour les exercices déjà renseignés. */}
                   <MachineSettingsBox
                     initialValue={ex.machineSettings}
+                    settings={machineOf(ex, machineLibrary)?.settings || []}
                     onSave={(value) => onUpdateMachineSettings(ex.id, value)}
                   />
+
+                  {/* Jauge de charge, rattachée à l'exercice et non à la machine. */}
+                  {machineOf(ex, machineLibrary)?.kind === "stack" && (
+                    <StackGauge
+                      best={bestWeightFor(ex)}
+                      max={(machineOf(ex, machineLibrary)?.stack || []).reduce(
+                        (a, v) => Math.max(a, parseFloat(String(v).replace(",", ".")) || 0), 0
+                      )}
+                    />
+                  )}
                   <CoachCommentBox comment={coachComments?.[ex.id]} coachedBlock={coachedBlock} coachName={coachedBlock?.coachName} />
                   {ex.note && <div style={S.exNote}>{ex.note}</div>}
                   {ex.youtubeUrl && (
@@ -8244,16 +8404,16 @@ function LogSession({ program, blocks, sessions, goals, onSaveGoal, onCancel, on
                     onChange={(e) => updateSet(ex.id, idx, "reps", e.target.value.replace(/[^0-9]/g, ""))}
                   />
                 )}
-                <input
+                <StepField
                   style={S.setInput}
-                  inputMode="decimal"
+                  steps={machineOf(ex, machineLibrary)?.kind === "stack" ? machineOf(ex, machineLibrary)?.stack : null}
                   placeholder={
                     goalDrafts[ex.id]?.poids?.[idx]
                       ? String(goalDrafts[ex.id].poids[idx])
                       : prevSets?.[idx] ? String(prevSets[idx].poids) : "-"
                   }
                   value={s.poids}
-                  onChange={(e) => updateSet(ex.id, idx, "poids", e.target.value.replace(/[^0-9.,]/g, ""))}
+                  onChange={(v) => updateSet(ex.id, idx, "poids", v)}
                 />
                 {ex.showRpe !== false && (
                   <select
@@ -19039,6 +19199,8 @@ const S = {
     border: "1px solid #4A443C", color: "#8A8078", fontSize: 11, fontWeight: 700,
     padding: 0, lineHeight: 1, verticalAlign: "-3px",
   },
+  gaugeTrack: { height: 4, background: "#2C2823", borderRadius: 2, overflow: "hidden" },
+  gaugeFill: { height: "100%", borderRadius: 2, transition: "width 200ms" },
   metaLine: { fontSize: 12, color: "#8A8078", lineHeight: 1.45, marginTop: 2 },
   backBtn: { display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: "#FFFFFF", fontSize: 13.5, padding: "4px 0 14px" },
   chartCard: { background: "#1B1A18", border: "1px solid #332E28", borderRadius: 14, padding: "12px 6px 4px" },
