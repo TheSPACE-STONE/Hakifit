@@ -9336,9 +9336,22 @@ function CardioEffortsEditor({ efforts = [], onChange }) {
 // intervention humaine les erreurs de frappe et les valeurs inventées : une vraie
 // colonne est croissante, à pas régulier, et démarre sur une plaque standard
 // (4,5 kg = 10 lb, 6,8 kg = 15 lb, ou un multiple de 5 en métrique).
+// Une valeur de palier doit être un nombre et rien d'autre. `parseFloat` seul
+// avalait tout ce qui COMMENÇAIT par un chiffre : une description de catalogue
+// comme "91 kg stack: 4" était lue 91, la pile passait pour cohérente et la
+// chaîne complète se retrouvait proposée telle quelle dans le menu en séance.
+// Le format français ("6,8") reste accepté ; le reste est compté et signalé.
+const NUM_PALIER = /^[0-9]+([.,][0-9]+)?$/;
 function checkStack(values) {
-  const n = (values || []).map((v) => parseFloat(String(v).replace(",", "."))).filter((x) => !isNaN(x));
+  const brut = (values || []).map((v) => String(v).trim()).filter(Boolean);
+  const n = brut
+    .filter((s) => NUM_PALIER.test(s))
+    .map((s) => parseFloat(s.replace(",", ".")));
+  const rejetees = brut.length - n.length;
   const warn = [];
+  if (rejetees > 0) {
+    warn.push(rejetees === 1 ? "1 valeur illisible" : `${rejetees} valeurs illisibles`);
+  }
   if (n.length === 0) return { ok: false, warn: ["aucune valeur lisible"] };
   if (n.length < 5) warn.push("moins de 5 paliers, inhabituel");
   if (n.some((x, i) => i > 0 && x <= n[i - 1])) warn.push("valeurs non croissantes");
@@ -9938,6 +9951,38 @@ function CommunityMachinesView({
 
   const active = kindF.length + brandF.length + muscleF.length + (onlyVerified ? 1 : 0);
 
+  // Liste complète des marques publiées, lue une fois au serveur. Sans elle, les
+  // puces ne pouvaient refléter que les 60 lignes rapportées par la recherche.
+  // Lecture directe : `supabaseClient` est déclaré au niveau du fichier (ligne 13),
+  // inutile de faire descendre une prop de plus à travers trois composants.
+  const [serverBrands, setServerBrands] = useState([]);
+  useEffect(() => {
+    if (!supabaseClient) return;
+    let vivant = true;
+    (async () => {
+      const { data, error } = await supabaseClient.rpc("shared_machine_brands");
+      // En cas d'échec on ne casse rien : on retombe sur les marques des résultats.
+      if (!vivant || error || !Array.isArray(data)) return;
+      setServerBrands(data.map((r) => (typeof r === "string" ? r : r?.brand)).filter(Boolean));
+    })();
+    return () => { vivant = false; };
+  }, []);
+
+  // Les puces de marque venaient de la liste PERSONNELLE (`brands`), qui ignore
+  // la plupart des marques publiées : Bodytone, Lexco, Hoist, Spartek, Tae Yeong,
+  // Titanium Strength, Vision Fitness et Concept2 n'avaient aucune puce, et
+  // "BodySolid" ne remontait rien puisque la donnée dit "Body-Solid".
+  // La liste personnelle est volontairement EXCLUE ici : sur des données
+  // communautaires, une marque absente du serveur ne peut renvoyer que 0 ligne.
+  // Elle produisait dix puces mortes (Cybex, Precor, Panatta, BodySolid...).
+  // `brandF` reste ajouté pour qu'un filtre actif ne disparaisse jamais de l'écran,
+  // et les marques des résultats couvrent le cas où la RPC échoue.
+  const brandChips = Array.from(new Set([
+    ...serverBrands,
+    ...(results || []).map((r) => (r?.machine?.brand || "").trim()),
+    ...brandF,
+  ].filter(Boolean))).sort((a, b) => a.localeCompare(b, "fr"));
+
   function run() {
     onSearch({
       q: q.trim(),
@@ -9999,7 +10044,7 @@ function CommunityMachinesView({
 
           <div style={S.settingGroupLabel}>Marque</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-            {brands.map((b) => {
+            {brandChips.map((b) => {
               const on = brandF.includes(b);
               return (
                 <button key={b} style={{ ...S.blockChip, ...(on ? S.blockChipSelected : {}) }}
