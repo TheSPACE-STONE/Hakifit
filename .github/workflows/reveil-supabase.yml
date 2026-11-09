@@ -1,0 +1,23 @@
+name: Réveil Supabase
+
+on:
+  schedule:
+    - cron: "12 6 * * 1,4"
+  workflow_dispatch:
+
+jobs:
+  reveil:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Interroger la base
+        run: |
+          code=$(curl -s -o /tmp/reponse.txt -w "%{http_code}" \
+            "https://ivaaunfmlnmqkvcoylpi.supabase.co/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "Code HTTP : $code"
+          cat /tmp/reponse.txt
+          if [ "$code" = "000" ]; then
+            echo "::error::Supabase n'a pas répondu — le projet est peut-être en pause."
+            exit 1
+          fi
